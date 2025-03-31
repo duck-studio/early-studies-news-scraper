@@ -80,7 +80,7 @@ const SearchRequestBaseSchema = z.object({
   customTbs: z
     .string()
     .startsWith('tbs=cdr:1,cd_min:', {
-      message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:'.",
+      message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:' (note: the 'tbs=' prefix will be automatically removed when sent to the API).",
     })
     .optional(),
   maximumCreditsUsed: z

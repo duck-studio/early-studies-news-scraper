@@ -3,7 +3,7 @@ import { apiReference } from '@scalar/hono-api-reference';
 import { Hono } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
 import { resolver } from 'hono-openapi/zod';
-import { fetchAllPagesForUrl } from './fetcher';
+import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
 import { ErrorResponseSchema, SearchRequestSchema, SearchResponseSchema } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
@@ -180,17 +180,28 @@ app.post(
     }
 
     try {
+      // Process publications in parallel, but the pages for each publication sequentially
+      const fetchPublicationWithLimit = (url: string) => 
+        fetchAllPagesForUrl(
+          url,
+          getTbsString(body.dateRangeOption, body.customTbs),
+          getGeoParams(body.region),
+          c.env.SERPER_API_KEY,
+          body.maxQueriesPerPublication,
+          () => true, // Simple credit check for now
+          requestLogger
+        );
+
+      // Create promises for all publications with concurrency control
+      const publicationPromises = body.publicationUrls.map(url => 
+        // This is imported from fetcher.ts and limits concurrent API calls across publications
+        publicationLimit(() => fetchPublicationWithLimit(url))
+      );
+      
+      // Wait for all publications to complete
       const results: FetchResult[] = await Promise.all(
-        body.publicationUrls.map(async (url) => {
-          const result: FetchAllPagesResult = await fetchAllPagesForUrl(
-            url,
-            getTbsString(body.dateRangeOption, body.customTbs),
-            getGeoParams(body.region),
-            c.env.SERPER_API_KEY,
-            body.maxQueriesPerPublication,
-            () => true, // Simple credit check for now
-            requestLogger
-          );
+        publicationPromises.map(async (resultPromise) => {
+          const result: FetchAllPagesResult = await resultPromise;
 
           if (result.error) {
             return {
@@ -219,6 +230,7 @@ app.post(
         })
       );
 
+      // Calculate the actual total of all results items
       const totalResults = results.reduce((acc, curr) => acc + curr.results.length, 0);
       const totalCreditsConsumed = results.reduce((acc, curr) => acc + curr.creditsConsumed, 0);
       const totalQueriesMade = results.reduce((acc, curr) => acc + curr.queriesMade, 0);

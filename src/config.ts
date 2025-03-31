@@ -5,6 +5,9 @@ export const config = {
 
   /** Number of results to request per Serper API page. Max is often 100. */
   resultsPerPage: 100,
+  
+  /** Maximum total results to fetch per publication (safety limit) */
+  maxResultsPerPublication: 300,
 
   /** Maximum number of concurrent requests allowed to the Serper API. Adjust based on API limits and testing. */
   concurrencyLimit: 10, // Start conservatively

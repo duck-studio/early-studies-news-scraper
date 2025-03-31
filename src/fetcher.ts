@@ -1,17 +1,18 @@
-import retry from 'async-retry';
 import pLimit from 'p-limit';
+import retry from 'async-retry';
 import type { Logger } from 'pino';
 import { config } from './config';
 import type {
-  FetchAllPagesResult,
-  GeoParams,
-  SerperNewsItem,
   SerperNewsResult,
+  SerperNewsItem,
+  GeoParams,
+  FetchAllPagesResult,
   TryConsumeCredit,
 } from './schema';
 
-// Create a concurrency limiter based on config
-const limit = pLimit(config.concurrencyLimit);
+// Create a concurrency limiter for parallel processing of multiple publications
+// Export it for use in index.ts
+export const publicationLimit = pLimit(config.concurrencyLimit);
 
 /**
  * Fetches a single page of news results from the Serper API for a given site query.
@@ -39,14 +40,24 @@ async function fetchSerperPage(
     'Content-Type': 'application/json',
   });
 
-  const requestBody = JSON.stringify({
+  // Make sure to set correct time-based search in the request
+  const requestPayload = {
     q: siteQuery,
     tbs: tbs,
     gl: geoParams.gl,
     location: geoParams.location,
     num: config.resultsPerPage,
     page: page,
-  });
+  };
+  
+  const requestBody = JSON.stringify(requestPayload);
+  
+  // Debug logging to capture the exact request parameters - no JSON.stringify to ensure it appears in logs
+  logger.info(`SERPER REQUEST DETAILS:
+URL: ${config.serperApiUrl}
+Method: POST
+Headers: Content-Type: application/json, X-API-KEY: ***
+Body: ${JSON.stringify(requestPayload, null, 2)}`);
 
   const requestOptions: RequestInit = {
     method: 'POST',
@@ -84,9 +95,23 @@ async function fetchSerperPage(
           throw error;
         }
 
-        const result = await response.json();
-        attemptLogger.debug('Serper API fetch successful');
-        return result as SerperNewsResult;
+        const result = await response.json() as SerperNewsResult;
+        
+        // More detailed logging without JSON.stringify to ensure it appears in logs
+        attemptLogger.info(`SERPER RESPONSE DETAILS:
+Results Count: ${result.news?.length ?? 0}
+Has News Array: ${Array.isArray(result.news)}
+Credits Used: ${result.credits}
+Parameters We Sent:
+  - TBS (Time Filter): "${tbs}"
+  - Page: ${page}
+Parameters Serper Used: ${JSON.stringify(result.searchParameters || {}, null, 2)}`);
+        
+        // Log full response details at debug level
+        attemptLogger.debug('Serper API response details', { 
+          responsePreview: `${JSON.stringify(result).substring(0, 500)}...` // Shortened for logs
+        });
+        return result;
       } catch (error: unknown) {
         attemptLogger.warn(
           { err: error },
@@ -134,116 +159,89 @@ export async function fetchAllPagesForUrl(
     siteQuery = `site:${new URL(url).hostname}`;
   } catch (e: unknown) {
     urlLogger.error({ err: e }, 'Invalid URL format provided');
-    return {
-      url,
-      queriesMade: 0,
-      credits: 0,
-      results: [],
-      error: new Error(`Invalid URL format: ${url}`),
-    };
+    return { url, queriesMade: 0, credits: 0, results: [], error: new Error(`Invalid URL format: ${url}`) };
   }
 
   urlLogger.info({ maxQueries: maxQueriesForThisUrl }, 'Starting iterative fetch for URL');
 
-  // Remove unused variable (previously used in the sequential approach)
   let queriesMade = 0;
   let totalCredits = 0;
   const aggregatedResults: SerperNewsItem[] = [];
 
-  // Create an array of page numbers to fetch
-  const pagesToFetch: number[] = [];
-  for (let page = 1; page <= maxQueriesForThisUrl; page++) {
-    pagesToFetch.push(page);
-  }
-
-  // Process pages with concurrency limit
-  const fetchPage = async (page: number) => {
+  // Sequential fetch approach to respect stopping conditions
+  let currentPage = 1;
+  
+  while (currentPage <= maxQueriesForThisUrl) {
     // 1. Check per-URL query limit
     if (queriesMade >= maxQueriesForThisUrl) {
       urlLogger.info({ queriesMade }, 'Reached max queries limit for this URL. Stopping.');
-      return null;
+      break;
     }
 
     // 2. Attempt to reserve a global credit *before* fetching
     if (!tryConsumeCredit()) {
       urlLogger.info({ queriesMade }, 'Global credit limit reached. Stopping fetch for this URL.');
-      return null;
+      break;
     }
 
-    const pageLogger = urlLogger.child({ page });
+    const pageLogger = urlLogger.child({ page: currentPage });
     try {
       pageLogger.info('Fetching page (credit reserved)');
-      const pageResult = await fetchSerperPage(siteQuery, tbs, geoParams, apiKey, page, pageLogger);
+      const pageResult = await fetchSerperPage(
+        siteQuery,
+        tbs,
+        geoParams,
+        apiKey,
+        currentPage,
+        pageLogger
+      );
 
       // Fetch successful, credit was used.
       queriesMade++;
       totalCredits += pageResult.credits;
 
       const newsCount = pageResult.news?.length ?? 0;
-      pageLogger.info(
-        {
-          resultsFound: newsCount,
-          creditsUsed: pageResult.credits,
-          requestedResults: config.resultsPerPage,
-          page,
-          siteQuery,
-          hasMoreResults: newsCount === config.resultsPerPage,
-          totalResultsSoFar: aggregatedResults.length,
-        },
-        'Page fetch successful.'
-      );
+      pageLogger.info({ 
+        resultsFound: newsCount, 
+        creditsUsed: pageResult.credits,
+        requestedResults: config.resultsPerPage,
+        page: currentPage,
+        siteQuery,
+        hasMoreResults: newsCount === config.resultsPerPage,
+        totalResultsSoFar: aggregatedResults.length
+      }, 'Page fetch successful.');
 
+      // Add results to our collection if any exist
       if (newsCount > 0) {
-        return pageResult.news;
+        aggregatedResults.push(...pageResult.news);
+        
+        // Add safety check for maximum results per publication
+        if (aggregatedResults.length >= config.maxResultsPerPublication) {
+          pageLogger.warn(`STOPPING FETCHES: Reached maximum results limit (${aggregatedResults.length}/${config.maxResultsPerPublication}) for this publication. This is a safety limit - if time filters were working properly, we would expect fewer results for narrow time ranges.`);
+          break;
+        }
       }
 
-      // Check stopping conditions based on results
+      // 3. Check stopping conditions based on results
       if (newsCount === 0) {
-        pageLogger.info('Found 0 results. Assuming end of results.');
-        return null; // Signal to stop fetching more pages
+        pageLogger.info(`STOPPING FETCHES: Found 0 results on page ${currentPage}. Total results fetched: ${aggregatedResults.length}.`);
+        break;
       }
+      
       if (newsCount < config.resultsPerPage) {
-        pageLogger.info(
-          {
-            resultsFound: newsCount,
-            requestedResults: config.resultsPerPage,
-            page,
-            totalResultsSoFar: aggregatedResults.length,
-          },
-          'Found fewer results than requested. Assuming end of results.'
-        );
-        return pageResult.news; // Return results but signal this is the last page
+        pageLogger.info(`STOPPING FETCHES: Found fewer results (${newsCount}) than requested (${config.resultsPerPage}) on page ${currentPage}. Total results fetched: ${aggregatedResults.length}. This is expected behavior when reaching the end of available results.`);
+        break;
       }
 
-      return pageResult.news;
+      // Continue to next page
+      currentPage++;
     } catch (error: unknown) {
       pageLogger.error(
         { err: error },
         'Failed to fetch page after retries. Stopping fetch for this URL.'
       );
-      return null;
+      return { url, queriesMade, credits: totalCredits, results: aggregatedResults, error: error as Error };
     }
-  };
-
-  try {
-    // Use pLimit to fetch pages with concurrency control
-    const pagePromises = pagesToFetch.map((page) => limit(() => fetchPage(page)));
-    const results = await Promise.all(pagePromises);
-
-    // Filter null results and flatten the array
-    const validResults = results.filter(Boolean);
-    for (const result of validResults) {
-      if (result) aggregatedResults.push(...result);
-    }
-  } catch (error: unknown) {
-    urlLogger.error({ err: error }, 'Error during concurrent page fetching.');
-    return {
-      url,
-      queriesMade,
-      credits: totalCredits,
-      results: aggregatedResults,
-      error: error as Error,
-    };
   }
 
   urlLogger.info(

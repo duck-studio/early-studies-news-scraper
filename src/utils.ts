@@ -13,32 +13,36 @@ export function getTbsString(dateRangeOption: string, customTbs?: string): strin
   const tbs = (() => {
     switch (dateRangeOption) {
       case 'Past Hour':
-        return 'tbs=qdr:h';
+        return 'qdr:h';
       case 'Past 24 Hours':
-        return 'tbs=qdr:d';
+        return 'qdr:d';
       case 'Past Week':
-        return 'tbs=qdr:w'; // Default handled by schema
+        return 'qdr:w'; // Default handled by schema
       case 'Past Month':
-        return 'tbs=qdr:m';
+        return 'qdr:m';
       case 'Past Year':
-        return 'tbs=qdr:y';
-      case 'Custom':
-        return customTbs || 'tbs=qdr:w'; // Schema validation ensures this exists
+        return 'qdr:y';
+      case 'Custom': {
+        // Remove tbs= prefix if present in customTbs
+        const cleanCustomTbs = customTbs ? 
+          (customTbs.startsWith('tbs=') ? customTbs.substring(4) : customTbs) : 
+          'qdr:w';
+        return cleanCustomTbs;
+      }
       default:
         // Should be unreachable due to schema validation & default
         logger.warn(
           `Unrecognized dateRangeOption '${dateRangeOption}', falling back to 'Past Week'.`
         );
-        return 'tbs=qdr:w';
+        return 'qdr:w';
     }
   })();
 
-  logger.info('Generated TBS string', {
-    dateRangeOption,
-    customTbs,
-    finalTbs: tbs,
-    query: `site:example.com ${tbs}`, // Example query to show format
-  });
+  logger.info(`TIME FILTER DETAILS:
+Date Range Option: "${dateRangeOption}"
+Custom TBS Value: "${customTbs || 'none'}"
+Final TBS Value: "${tbs}"
+Example Query: site:example.com with timeframe parameter 'tbs=${tbs}'`);
 
   return tbs;
 }
