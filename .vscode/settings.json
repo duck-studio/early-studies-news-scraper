@@ -1,0 +1,45 @@
+{
+  "yaml.schemas": {
+    "file:///Users/sam/.cursor/extensions/mastersam.maestro-workbench-0.9.3/schema/schema.v0.json": [
+      "maestro/**/*.yaml",
+      "maestro/**/*.yml",
+      "**/.maestro/**/*.yaml",
+      "**/.maestro/**/*.yml"
+    ]
+  },
+  "editor.defaultFormatter": "@biomejs/biome",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports.biome": true,
+    "quickfix.biome": true
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "@biomejs/biome"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "@biomejs/biome"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "@biomejs/biome"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "files.associations": {
+    "*.ts": "typescript"
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/CVS": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.git": true
+  }
+}
