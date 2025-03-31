@@ -138,6 +138,7 @@ export async function fetchAllPagesForUrl(
 
   let currentPage = 1;
   let queriesMade = 0;
+  let totalCredits = 0;
   const aggregatedResults: SerperNewsItem[] = [];
 
   while (true) {
@@ -167,9 +168,10 @@ export async function fetchAllPagesForUrl(
 
       // Fetch successful, credit was used.
       queriesMade++;
+      totalCredits += pageResult.credits;
 
       const newsCount = pageResult.news?.length ?? 0;
-      pageLogger.info({ resultsFound: newsCount }, `Page fetch successful.`);
+      pageLogger.info({ resultsFound: newsCount, creditsUsed: pageResult.credits }, `Page fetch successful.`);
 
       if (newsCount > 0) {
         aggregatedResults.push(...pageResult.news);
@@ -194,13 +196,13 @@ export async function fetchAllPagesForUrl(
         { err: error },
         `Failed to fetch page after retries. Stopping fetch for this URL.`
       );
-      return { url, queriesMade, results: aggregatedResults, error };
+      return { url, queriesMade, credits: totalCredits, results: aggregatedResults, error };
     }
   }
 
   urlLogger.info(
-    { queriesMade, totalResults: aggregatedResults.length },
+    { queriesMade, totalResults: aggregatedResults.length, totalCredits },
     `Finished fetching for URL.`
   );
-  return { url, queriesMade, results: aggregatedResults };
+  return { url, queriesMade, credits: totalCredits, results: aggregatedResults };
 }

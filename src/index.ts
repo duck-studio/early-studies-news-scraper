@@ -164,6 +164,13 @@ app.post(
 
     requestLogger.info("Received search request", { body });
 
+    // Validate Serper API key exists in environment
+    if (!c.env.SERPER_API_KEY) {
+      const error = new Error("SERPER_API_KEY environment variable is not set");
+      requestLogger.error("Environment configuration error", { error });
+      throw error;
+    }
+
     try {
       const results: FetchResult[] = await Promise.all(
         body.publicationUrls.map(async url => {
@@ -171,7 +178,7 @@ app.post(
             url,
             getTbsString(body.dateRangeOption, body.customTbs),
             getGeoParams(body.region),
-            body.serperApiKey || c.env.SERPER_API_KEY || '',
+            c.env.SERPER_API_KEY,
             body.maxQueriesPerPublication,
             () => true, // Simple credit check for now
             requestLogger
@@ -182,7 +189,8 @@ app.post(
               status: "rejected",
               url: result.url,
               queriesMade: result.queriesMade,
-              results: result.results,
+              creditsConsumed: result.credits,
+              results: [],
               reason: result.error.message
             };
           }
@@ -191,18 +199,57 @@ app.post(
             status: "fulfilled",
             url: result.url,
             queriesMade: result.queriesMade,
-            results: result.results
+            creditsConsumed: result.credits,
+            results: result.results.map(item => ({
+              headline: item.title,
+              publicationUrl: result.url,
+              url: item.link,
+              snippet: item.snippet,
+              source: item.source
+            }))
           };
         })
       );
 
       const totalResults = results.reduce((acc, curr) => acc + curr.results.length, 0);
+      const totalCreditsConsumed = results.reduce((acc, curr) => acc + curr.creditsConsumed, 0);
+      const totalQueriesMade = results.reduce((acc, curr) => acc + curr.queriesMade, 0);
+      const successCount = results.filter(r => r.status === "fulfilled").length;
+      const failureCount = results.filter(r => r.status === "rejected").length;
+
       requestLogger.info("Search completed successfully", { 
         totalResults,
-        successCount: results.filter(r => r.status === "fulfilled").length,
-        failureCount: results.filter(r => r.status === "rejected").length
+        totalCreditsConsumed,
+        totalQueriesMade,
+        successCount,
+        failureCount
       });
-      return c.json(results);
+
+      const summary = {
+        totalResults,
+        totalCreditsConsumed,
+        totalQueriesMade,
+        successCount,
+        failureCount
+      };
+
+      if (body.flattenResults) {
+        // Flatten results into a single array
+        const flattenedResults = results.flatMap(result => 
+          result.status === "fulfilled" ? result.results : []
+        );
+
+        return c.json({
+          results: flattenedResults,
+          summary
+        });
+      } else {
+        // Return nested results
+        return c.json({
+          results,
+          summary
+        });
+      }
     } catch (error) {
       requestLogger.error("Search failed", { error });
       return c.json({ error: "Failed to fetch news articles" }, 500);

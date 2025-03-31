@@ -25,6 +25,15 @@ const SerperNewsItemSchema = z.object({
   position: z.number().optional(),
 });
 
+// New schema for transformed news items
+const TransformedNewsItemSchema = z.object({
+  headline: z.string(),
+  publicationUrl: z.string(),
+  url: z.string(),
+  snippet: z.string(),
+  source: z.string(),
+});
+
 const SerperSearchParametersSchema = z.object({
   q: z.string(),
   gl: z.string().optional(),
@@ -39,13 +48,15 @@ const SerperSearchParametersSchema = z.object({
 const SerperNewsResultSchema = z.object({
   searchParameters: SerperSearchParametersSchema,
   news: z.array(SerperNewsItemSchema),
+  credits: z.number(),
 });
 
 // --- API Response Schemas ---
 const BaseResponseSchema = z.object({
   url: z.string(),
   queriesMade: z.number(),
-  results: z.array(SerperNewsItemSchema),
+  creditsConsumed: z.number(),
+  results: z.array(TransformedNewsItemSchema),
 });
 
 const FetchSuccessSchema = BaseResponseSchema.extend({
@@ -89,6 +100,7 @@ const SearchRequestBaseSchema = z.object({
     .string()
     .min(1, { message: "API Key cannot be empty string if provided." })
     .optional(),
+  flattenResults: z.boolean().optional().default(true),
 });
 
 // --- Hono Request Input Schema ---
@@ -104,7 +116,19 @@ export const SearchRequestSchema = SearchRequestBaseSchema.refine(
 );
 
 // --- OpenAPI Response Schemas ---
-export const SearchResponseSchema = z.array(FetchResultSchema);
+const SearchSummarySchema = z.object({
+  totalResults: z.number(),
+  totalCreditsConsumed: z.number(),
+  totalQueriesMade: z.number(),
+  successCount: z.number(),
+  failureCount: z.number(),
+});
+
+export const SearchResponseSchema = z.object({
+  results: z.array(z.union([TransformedNewsItemSchema, FetchResultSchema])),
+  summary: SearchSummarySchema,
+});
+
 export const ErrorResponseSchema = z.object({
   error: z.string(),
 });
@@ -117,11 +141,13 @@ export type SerperNewsResult = z.infer<typeof SerperNewsResultSchema>;
 export type FetchResult = z.infer<typeof FetchResultSchema>;
 export type FetchSuccess = z.infer<typeof FetchSuccessSchema>;
 export type FetchFailure = z.infer<typeof FetchFailureSchema>;
+export type TransformedNewsItem = z.infer<typeof TransformedNewsItemSchema>;
 
 // --- Internal Fetcher Helper Types ---
 export type FetchAllPagesResult = {
   url: string;
   queriesMade: number;
+  credits: number;
   results: SerperNewsItem[];
   error?: Error;
 };
