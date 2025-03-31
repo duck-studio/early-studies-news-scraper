@@ -1,17 +1,17 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 // --- Base Schemas ---
-const RegionSchema = z.enum(["US", "UK"]);
+const RegionSchema = z.enum(['US', 'UK']);
 const PublicationUrlsSchema = z
-  .array(z.string().url({ message: "Each publication URL must be a valid URL." }))
-  .min(1, { message: "At least one publication URL is required." });
+  .array(z.string().url({ message: 'Each publication URL must be a valid URL.' }))
+  .min(1, { message: 'At least one publication URL is required.' });
 const DateRangeEnumSchema = z.enum([
-  "Past Hour",
-  "Past 24 Hours",
-  "Past Week",
-  "Past Month",
-  "Past Year",
-  "Custom",
+  'Past Hour',
+  'Past 24 Hours',
+  'Past Week',
+  'Past Month',
+  'Past Year',
+  'Custom',
 ]);
 
 // --- Serper API Schemas ---
@@ -60,45 +60,44 @@ const BaseResponseSchema = z.object({
 });
 
 const FetchSuccessSchema = BaseResponseSchema.extend({
-  status: z.literal("fulfilled"),
+  status: z.literal('fulfilled'),
 });
 
 const FetchFailureSchema = BaseResponseSchema.extend({
-  status: z.literal("rejected"),
+  status: z.literal('rejected'),
   reason: z.string(),
 });
 
-const FetchResultSchema = z.discriminatedUnion("status", [
-  FetchSuccessSchema,
-  FetchFailureSchema,
-]);
+const FetchResultSchema = z.discriminatedUnion('status', [FetchSuccessSchema, FetchFailureSchema]);
 
 // --- Request Schemas ---
 const SearchRequestBaseSchema = z.object({
   publicationUrls: PublicationUrlsSchema,
   region: RegionSchema,
-  dateRangeOption: DateRangeEnumSchema.optional().default("Past Week"),
+  dateRangeOption: DateRangeEnumSchema.optional()
+    .default('Past Week')
+    .describe("Date range for the search. Defaults to 'Past Week' if not specified."),
   customTbs: z
     .string()
-    .startsWith("tbs=cdr:1,cd_min:", {
+    .startsWith('tbs=cdr:1,cd_min:', {
       message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:'.",
     })
     .optional(),
   maximumCreditsUsed: z
     .number()
     .int()
-    .positive("Maximum credits must be a positive integer.")
+    .positive('Maximum credits must be a positive integer.')
     .optional()
-    .default(300),
+    .default(500),
   maxQueriesPerPublication: z
     .number()
     .int()
-    .positive("Max queries per publication must be a positive integer.")
+    .positive('Max queries per publication must be a positive integer.')
     .optional()
-    .default(3),
+    .default(5),
   serperApiKey: z
     .string()
-    .min(1, { message: "API Key cannot be empty string if provided." })
+    .min(1, { message: 'API Key cannot be empty string if provided.' })
     .optional(),
   flattenResults: z.boolean().optional().default(true),
 });
@@ -106,12 +105,12 @@ const SearchRequestBaseSchema = z.object({
 // --- Hono Request Input Schema ---
 export const SearchRequestSchema = SearchRequestBaseSchema.refine(
   (data) =>
-    data.dateRangeOption !== "Custom" ||
-    (typeof data.customTbs === "string" && data.customTbs.length > 0),
+    data.dateRangeOption !== 'Custom' ||
+    (typeof data.customTbs === 'string' && data.customTbs.length > 0),
   {
     message:
       "The 'customTbs' parameter is required and must be non-empty when 'dateRangeOption' is 'Custom'.",
-    path: ["customTbs"],
+    path: ['customTbs'],
   }
 );
 

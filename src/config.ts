@@ -1,7 +1,7 @@
 /** Configuration constants for the Serper search service. */
 export const config = {
   /** Serper API endpoint for news search. */
-  serperApiUrl: "https://google.serper.dev/news",
+  serperApiUrl: 'https://google.serper.dev/news',
 
   /** Number of results to request per Serper API page. Max is often 100. */
   resultsPerPage: 100,
