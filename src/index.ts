@@ -212,14 +212,18 @@ app.post(
             url: result.url,
             queriesMade: result.queriesMade,
             creditsConsumed: result.credits,
-            results: result.results.map((item) => ({
-              headline: item.title,
-              publicationUrl: result.url,
-              url: item.link,
-              snippet: item.snippet,
-              source: item.source,
-              publicationDate: item.date,
-            })),
+            results: result.results.map((item) => {
+              const parsedDate = parseSerperDate(item.date);
+              return {
+                headline: item.title,
+                publicationUrl: result.url,
+                url: item.link,
+                snippet: item.snippet,
+                source: item.source,
+                publicationDate: item.date,
+                normalizedDate: parsedDate ? parsedDate.toLocaleDateString('en-GB') : null
+              };
+            }),
           };
         })
       );
