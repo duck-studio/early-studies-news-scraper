@@ -187,7 +187,6 @@ export async function fetchAllPagesForUrl(
         pageLogger
       );
 
-      // Fetch successful, credit was used.
       queriesMade++;
       totalCredits += pageResult.credits;
 
@@ -202,7 +201,6 @@ export async function fetchAllPagesForUrl(
         totalResultsSoFar: aggregatedResults.length
       }, 'Page fetch successful.');
 
-      // Add results to our collection if any exist
       if (newsCount > 0) {
         aggregatedResults.push(...pageResult.news);
         
@@ -224,7 +222,6 @@ export async function fetchAllPagesForUrl(
         break;
       }
 
-      // Continue to next page
       currentPage++;
     } catch (error: unknown) {
       pageLogger.error(

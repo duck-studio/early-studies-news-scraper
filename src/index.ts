@@ -16,15 +16,12 @@ import type { FetchAllPagesResult, FetchResult } from './schema';
 import type { Env } from './types/cloudflare';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from './utils';
 
-// Define the app type with Variables
 type Variables = {
   requestId: string;
 };
 
-// Initialize Hono app with type
 const app = new Hono<{ Variables: Variables; Bindings: Env }>();
 
-// Middleware for request logging
 app.use('*', async (c, next) => {
   try {
     const logger = createLogger(c.env);
@@ -43,7 +40,6 @@ app.use('*', async (c, next) => {
   }
 });
 
-// Root route handler
 app.get('/', async (c) => {
   try {
     const logger = createLogger(c.env);
@@ -64,7 +60,6 @@ app.get('/', async (c) => {
   }
 });
 
-// Favicon handler
 app.get('/favicon.ico', (c) => {
   const logger = createLogger(c.env);
   const requestLogger = createRequestLogger(logger, c.get('requestId'));
@@ -72,7 +67,6 @@ app.get('/favicon.ico', (c) => {
   return new Response(null, { status: 204 }); // No content response
 });
 
-// OpenAPI documentation endpoint
 app.get(
   '/openapi',
   openAPISpecs(app, {
@@ -100,7 +94,6 @@ app.get(
   })
 );
 
-// API documentation UI endpoint
 app.get(
   '/docs',
   apiReference({
@@ -109,10 +102,8 @@ app.get(
   })
 );
 
-// API endpoint for search requests
 app.post(
   '/search',
-  // Bearer token middleware
   async (c, next) => {
     const authHeader = c.req.header('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -136,8 +127,8 @@ app.post(
             example: {
               publicationUrls: ['https://bbc.co.uk'],
               region: 'UK',
-              dateRangeOption: 'Past Week', // Default value if not specified
-              maxQueriesPerPublication: 5, // Default value if not specified
+              dateRangeOption: 'Past Week', 
+              maxQueriesPerPublication: 5, 
             },
           },
         },
@@ -178,18 +169,15 @@ app.post(
 
     requestLogger.info('Received search request', { body });
 
-    // Validate Serper API key exists in environment
     if (!c.env.SERPER_API_KEY) {
       const error = new Error('SERPER_API_KEY environment variable is not set');
       requestLogger.error('Environment configuration error', { error });
       throw error;
     }
 
-    // Calculate the target date range for filtering
     const dateRange = getDateRange(body.dateRangeOption);
 
     try {
-      // Process publications in parallel, but the pages for each publication sequentially
       const fetchPublicationWithLimit = (url: string) => 
         fetchAllPagesForUrl(
           url,
@@ -200,13 +188,10 @@ app.post(
           requestLogger
         );
 
-      // Create promises for all publications with concurrency control
       const publicationPromises = body.publicationUrls.map(url => 
-        // This is imported from fetcher.ts and limits concurrent API calls across publications
         publicationLimit(() => fetchPublicationWithLimit(url))
       );
       
-      // Wait for all publications to complete
       const results: FetchResult[] = await Promise.all(
         publicationPromises.map(async (resultPromise) => {
           const result: FetchAllPagesResult = await resultPromise;
@@ -239,7 +224,6 @@ app.post(
         })
       );
 
-      // --- Post-fetch Date Filtering ---
       let totalItemsBeforeFiltering = 0;
       let totalItemsAfterFiltering = 0;
 
@@ -248,12 +232,10 @@ app.post(
           const initialCount = result.results.length;
           totalItemsBeforeFiltering += initialCount;
 
-          // Filter results in place
           result.results = result.results.filter((item: TransformedNewsItem) => {
             const parsedDate = parseSerperDate(item.publicationDate);
             const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
             if (!keep && parsedDate) {
-              // Log items filtered out due to date range mismatch
               requestLogger.debug({ 
                 headline: item.headline, 
                 publicationDate: item.publicationDate, 
@@ -262,7 +244,6 @@ app.post(
                 rangeEnd: dateRange.end.toISOString(), 
               }, 'Filtering result: Outside date range');
             } else if (!parsedDate) {
-              // Log items filtered out due to parsing failure
               requestLogger.debug({ 
                 headline: item.headline, 
                 publicationDate: item.publicationDate 
@@ -274,7 +255,6 @@ app.post(
           const finalCount = result.results.length;
           totalItemsAfterFiltering += finalCount;
         }
-        // No filtering needed for 'rejected' status
       }
 
       const filteredOutCount = totalItemsBeforeFiltering - totalItemsAfterFiltering;
@@ -285,7 +265,6 @@ app.post(
         );
       }
 
-      // Calculate the actual total of all results items (now reflects filtered results)
       const totalResults = results.reduce((acc, curr) => acc + curr.results.length, 0);
       const totalCreditsConsumed = results.reduce((acc, curr) => acc + curr.creditsConsumed, 0);
       const totalQueriesMade = results.reduce((acc, curr) => acc + curr.queriesMade, 0);
@@ -314,7 +293,6 @@ app.post(
         })),
       });
 
-      // Determine whether to flatten results based on request parameter
       const finalResults = body.flattenResults ? results.flatMap((r) => r.results) : results;
 
       return c.json({

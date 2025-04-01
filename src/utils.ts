@@ -14,7 +14,6 @@ import { createLogger } from './logger';
 import type { GeoParams } from './schema';
 import type { Env } from './types/cloudflare';
 
-// Create a default logger instance
 const logger = createLogger({ NODE_ENV: 'development', LOG_LEVEL: 'info' } as Env);
 
 /**
