@@ -19,8 +19,5 @@ export const config = {
     minTimeout: 1000, // Minimum delay between retries (ms)
     maxTimeout: 5000, // Maximum delay between retries (ms)
     randomize: true, // Add jitter to delays
-  },
-
-  /** Default port for the Hono server if PORT env var is not set. */
-  defaultPort: 3000,
+  }
 };

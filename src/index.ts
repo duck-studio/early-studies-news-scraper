@@ -1,14 +1,20 @@
 import { zValidator } from '@hono/zod-validator';
 import { apiReference } from '@scalar/hono-api-reference';
+import { isWithinInterval } from 'date-fns';
 import { Hono } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
 import { resolver } from 'hono-openapi/zod';
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
-import { ErrorResponseSchema, SearchRequestSchema, SearchResponseSchema } from './schema';
+import {
+  ErrorResponseSchema,
+  SearchRequestSchema,
+  SearchResponseSchema,
+  type TransformedNewsItem,
+} from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
 import type { Env } from './types/cloudflare';
-import { getGeoParams, getTbsString } from './utils';
+import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from './utils';
 
 // Define the app type with Variables
 type Variables = {
@@ -179,6 +185,9 @@ app.post(
       throw error;
     }
 
+    // Calculate the target date range for filtering
+    const dateRange = getDateRange(body.dateRangeOption);
+
     try {
       // Process publications in parallel, but the pages for each publication sequentially
       const fetchPublicationWithLimit = (url: string) => 
@@ -188,7 +197,6 @@ app.post(
           getGeoParams(body.region),
           c.env.SERPER_API_KEY,
           body.maxQueriesPerPublication,
-          () => true, // Simple credit check for now
           requestLogger
         );
 
@@ -225,12 +233,59 @@ app.post(
               url: item.link,
               snippet: item.snippet,
               source: item.source,
+              publicationDate: item.date,
             })),
           };
         })
       );
 
-      // Calculate the actual total of all results items
+      // --- Post-fetch Date Filtering ---
+      let totalItemsBeforeFiltering = 0;
+      let totalItemsAfterFiltering = 0;
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const initialCount = result.results.length;
+          totalItemsBeforeFiltering += initialCount;
+
+          // Filter results in place
+          result.results = result.results.filter((item: TransformedNewsItem) => {
+            const parsedDate = parseSerperDate(item.publicationDate);
+            const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
+            if (!keep && parsedDate) {
+              // Log items filtered out due to date range mismatch
+              requestLogger.debug({ 
+                headline: item.headline, 
+                publicationDate: item.publicationDate, 
+                parsedDate: parsedDate.toISOString(),
+                rangeStart: dateRange.start.toISOString(),
+                rangeEnd: dateRange.end.toISOString(), 
+              }, 'Filtering result: Outside date range');
+            } else if (!parsedDate) {
+              // Log items filtered out due to parsing failure
+              requestLogger.debug({ 
+                headline: item.headline, 
+                publicationDate: item.publicationDate 
+              }, 'Filtering result: Could not parse date');
+            }
+            return keep; 
+          });
+
+          const finalCount = result.results.length;
+          totalItemsAfterFiltering += finalCount;
+        }
+        // No filtering needed for 'rejected' status
+      }
+
+      const filteredOutCount = totalItemsBeforeFiltering - totalItemsAfterFiltering;
+      if (filteredOutCount > 0) {
+        requestLogger.info(
+          { filteredOutCount, totalItemsBeforeFiltering, totalItemsAfterFiltering },
+          `Filtered out ${filteredOutCount} results based on publication date.`
+        );
+      }
+
+      // Calculate the actual total of all results items (now reflects filtered results)
       const totalResults = results.reduce((acc, curr) => acc + curr.results.length, 0);
       const totalCreditsConsumed = results.reduce((acc, curr) => acc + curr.creditsConsumed, 0);
       const totalQueriesMade = results.reduce((acc, curr) => acc + curr.queriesMade, 0);

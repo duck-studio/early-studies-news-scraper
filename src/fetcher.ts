@@ -1,13 +1,12 @@
-import pLimit from 'p-limit';
 import retry from 'async-retry';
+import pLimit from 'p-limit';
 import type { Logger } from 'pino';
 import { config } from './config';
 import type {
-  SerperNewsResult,
-  SerperNewsItem,
-  GeoParams,
   FetchAllPagesResult,
-  TryConsumeCredit,
+  GeoParams,
+  SerperNewsItem,
+  SerperNewsResult,
 } from './schema';
 
 // Create a concurrency limiter for parallel processing of multiple publications
@@ -138,7 +137,6 @@ Parameters Serper Used: ${JSON.stringify(result.searchParameters || {}, null, 2)
  * @param geoParams - Geographical parameters ({ gl, location }).
  * @param apiKey - The Serper API key.
  * @param maxQueriesForThisUrl - Maximum number of pages to fetch for this specific URL.
- * @param tryConsumeCredit - Function to attempt consuming a credit before fetching a page.
  * @param logger - Pino logger instance for contextual logging.
  * @returns A Promise resolving to a FetchAllPagesResult object.
  */
@@ -148,7 +146,6 @@ export async function fetchAllPagesForUrl(
   geoParams: GeoParams,
   apiKey: string,
   maxQueriesForThisUrl: number,
-  tryConsumeCredit: TryConsumeCredit,
   logger: Logger
 ): Promise<FetchAllPagesResult> {
   const urlLogger = logger.child({ publicationUrl: url });
@@ -175,12 +172,6 @@ export async function fetchAllPagesForUrl(
     // 1. Check per-URL query limit
     if (queriesMade >= maxQueriesForThisUrl) {
       urlLogger.info({ queriesMade }, 'Reached max queries limit for this URL. Stopping.');
-      break;
-    }
-
-    // 2. Attempt to reserve a global credit *before* fetching
-    if (!tryConsumeCredit()) {
-      urlLogger.info({ queriesMade }, 'Global credit limit reached. Stopping fetch for this URL.');
       break;
     }
 

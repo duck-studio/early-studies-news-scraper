@@ -32,6 +32,7 @@ const TransformedNewsItemSchema = z.object({
   url: z.string(),
   snippet: z.string(),
   source: z.string(),
+  publicationDate: z.string(),
 });
 
 const SerperSearchParametersSchema = z.object({
@@ -83,22 +84,12 @@ const SearchRequestBaseSchema = z.object({
       message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:' (note: the 'tbs=' prefix will be automatically removed when sent to the API).",
     })
     .optional(),
-  maximumCreditsUsed: z
-    .number()
-    .int()
-    .positive('Maximum credits must be a positive integer.')
-    .optional()
-    .default(500),
   maxQueriesPerPublication: z
     .number()
     .int()
     .positive('Max queries per publication must be a positive integer.')
     .optional()
     .default(5),
-  serperApiKey: z
-    .string()
-    .min(1, { message: 'API Key cannot be empty string if provided.' })
-    .optional(),
   flattenResults: z.boolean().optional().default(true),
 });
 
@@ -124,7 +115,7 @@ const SearchSummarySchema = z.object({
 });
 
 export const SearchResponseSchema = z.object({
-  results: z.array(z.union([TransformedNewsItemSchema, FetchResultSchema])),
+  results: z.array(TransformedNewsItemSchema),
   summary: SearchSummarySchema,
 });
 
@@ -150,8 +141,6 @@ export type FetchAllPagesResult = {
   results: SerperNewsItem[];
   error?: Error;
 };
-
-export type TryConsumeCredit = () => boolean;
 
 export type GeoParams = {
   gl: string;

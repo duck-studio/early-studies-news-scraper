@@ -19,9 +19,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@hono/zod-validator": "^0.2.2",
+    "@hono/zod-validator": "^0.4.3",
     "@scalar/hono-api-reference": "^0.7.4",
     "async-retry": "^1.3.3",
+    "date-fns": "^4.1.0",
     "hono": "^4.4.12",
     "hono-openapi": "^0.4.6",
     "nanoid": "^5.0.6",
@@ -36,7 +37,7 @@
     "@types/async-retry": "^1.4.8",
     "@types/node": "^20.14.9",
     "eslint": "^8.x",
-    "pino-pretty": "^11.2.1",
+    "pino-pretty": "^11.3.0",
     "tsx": "^4.16.2",
     "typescript": "^5.5.2",
     "wrangler": "^3.28.1"
