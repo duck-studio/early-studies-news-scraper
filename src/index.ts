@@ -13,7 +13,7 @@ import {
   type TransformedNewsItem,
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
-import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from './utils';
+import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
 
 type Variables = {
   requestId: string;
@@ -48,7 +48,7 @@ app.get('/', async (c) => {
       headers: Object.fromEntries(c.req.raw.headers.entries()),
     });
     return c.json({
-      name: 'Hono Serper News Search API',
+      name: 'Early Studies Headlines Fetcher API',
       version: '1.0.0',
       documentation: '/docs',
       openapi: '/openapi',
@@ -63,7 +63,7 @@ app.get('/favicon.ico', (c) => {
   const logger = createLogger(c.env);
   const requestLogger = createRequestLogger(logger, c.get('requestId'));
   requestLogger.info('Favicon requested');
-  return new Response(null, { status: 204 }); // No content response
+  return new Response(null, { status: 204 }); 
 });
 
 app.get(
@@ -71,9 +71,9 @@ app.get(
   openAPISpecs(app, {
     documentation: {
       info: {
-        title: 'Hono Serper News Search API',
+        title: 'Early Studies Headlines Fetcher API',
         version: '1.0.0',
-        description: 'API for concurrent news article fetching using Serper API',
+        description: 'API for fetching news headlines for Early Studies',
       },
       servers: [
         { url: 'http://localhost:8787', description: 'Local Development' },
@@ -104,18 +104,19 @@ app.get(
 app.post(
   '/search',
   async (c, next) => {
-    const authHeader = c.req.header('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return c.json({ error: 'Missing or invalid bearer token' }, 401);
+    const logger = createLogger(c.env);
+    const requestLogger = createRequestLogger(logger, c.get('requestId'));
+    const {missing, valid} = validateToken(c.req.header('Authorization'), c.env.BEARER_TOKEN, requestLogger);
+    if (missing) {
+      return c.json({ error: 'Missing bearer token' }, 401);
     }
-    const token = authHeader.split(' ')[1];
-    if (token !== c.env.BEARER_TOKEN) {
+    if (!valid) {
       return c.json({ error: 'Invalid bearer token' }, 401);
     }
     await next();
   },
   describeRoute({
-    description: 'Search for news articles from multiple publications',
+    description: 'Search for news headlines from one or more publications',
     tags: ['Search'],
     security: [{ bearerAuth: [] }],
     request: {
@@ -315,7 +316,6 @@ app.post(
   }
 );
 
-// Global error handler
 app.onError((err, c) => {
   const logger = createLogger(c.env);
   const requestLogger = createRequestLogger(logger, c.get('requestId'));

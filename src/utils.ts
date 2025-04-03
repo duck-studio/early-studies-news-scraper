@@ -10,16 +10,30 @@ import {
   subWeeks,
   subYears
 } from 'date-fns';
-import { createLogger } from './logger';
+import { Logger } from 'pino';
 import type { GeoParams } from './schema';
 
-const logger = createLogger({ NODE_ENV: 'development', LOG_LEVEL: 'info' } as Partial<Env>);
+export function validateToken(userToken: string | undefined | null, expectedToken: string, logger?: Logger): {
+  missing: boolean;
+  valid: boolean;
+} {
+  if (!userToken) {
+    return { missing: true, valid: false };
+  }
+  if (userToken !== expectedToken) {
+    if (logger) {
+      logger.warn('Invalid token');
+    }
+    return { missing: false, valid: false };
+  }
+  return { missing: false, valid: true };
+}
 
 /**
  * Converts a user-friendly date range option and optional custom TBS
  * into the corresponding Serper API 'tbs' parameter string.
  */
-export function getTbsString(dateRangeOption: string, customTbs?: string): string {
+export function getTbsString(dateRangeOption: string, customTbs?: string, logger?: Logger): string {
   const tbs = (() => {
     switch (dateRangeOption) {
       case 'Past Hour':
@@ -41,18 +55,22 @@ export function getTbsString(dateRangeOption: string, customTbs?: string): strin
       }
       default:
         // Should be unreachable due to schema validation & default
-        logger.warn(
-          `Unrecognized dateRangeOption '${dateRangeOption}', falling back to 'Past Week'.`
-        );
+        if (logger) {
+          logger.warn(
+            `Unrecognized dateRangeOption '${dateRangeOption}', falling back to 'Past Week'.`
+          );
+        }
         return 'qdr:w';
     }
   })();
 
-  logger.info(`TIME FILTER DETAILS:
+  if (logger) {
+    logger.info(`TIME FILTER DETAILS:
 Date Range Option: "${dateRangeOption}"
 Custom TBS Value: "${customTbs || 'none'}"
 Final TBS Value: "${tbs}"
 Example Query: site:example.com with timeframe parameter 'tbs=${tbs}'`);
+  }
 
   return tbs;
 }
@@ -61,7 +79,7 @@ Example Query: site:example.com with timeframe parameter 'tbs=${tbs}'`);
  * Maps the application's region ('US' | 'UK') to Serper's
  * geographical parameters ('gl' and 'location').
  */
-export function getGeoParams(region: string): GeoParams {
+export function getGeoParams(region: string, logger?: Logger): GeoParams {
   switch (region) {
     case 'US':
       return { gl: 'us', location: 'United States' };
@@ -69,7 +87,9 @@ export function getGeoParams(region: string): GeoParams {
       return { gl: 'gb', location: 'United Kingdom' };
     default:
       // Should be unreachable due to schema validation
-      logger.warn(`Unrecognized region '${region}', falling back to 'US'.`);
+      if (logger) {
+        logger.warn(`Unrecognized region '${region}', falling back to 'US'.`);
+      }
       return { gl: 'us', location: 'United States' };
   }
 }
@@ -88,7 +108,7 @@ type DateRange = {
  * @param dateRangeOption - The selected date range option (e.g., 'Past Week').
  * @returns A DateRange object with start and end dates.
  */
-export function getDateRange(dateRangeOption: string): DateRange {
+export function getDateRange(dateRangeOption: string, logger?: Logger): DateRange {
   const now = new Date();
   let startDate: Date;
 
@@ -109,7 +129,9 @@ export function getDateRange(dateRangeOption: string): DateRange {
       // TODO: Potentially parse customTbs (e.g., cd_min, cd_max) if needed.
       // For now, fall back to a wide range or a default like 'Past Week'?
       // Falling back to Past Week for now as tbs parsing is complex.
-      logger.warn('Custom TBS range filtering not implemented, falling back to Past Week.');
+      if (logger) {
+        logger.warn('Custom TBS range filtering not implemented, falling back to Past Week.');
+      }
       startDate = subWeeks(now, 1);
       break;
     default:
@@ -118,9 +140,11 @@ export function getDateRange(dateRangeOption: string): DateRange {
   }
 
   // Log the calculated range for debugging
-  logger.info(`Calculated Date Range for Filtering:
+  if (logger) {
+    logger.info(`Calculated Date Range for Filtering:
   Start: ${lightFormat(startDate, 'yyyy-MM-dd HH:mm:ss')}
   End:   ${lightFormat(now, 'yyyy-MM-dd HH:mm:ss')}`);
+  }
 
   return { start: startDate, end: now };
 }
@@ -131,7 +155,7 @@ export function getDateRange(dateRangeOption: string): DateRange {
  * @param dateString - The date string from Serper.
  * @returns A Date object if parsing is successful, otherwise null.
  */
-export function parseSerperDate(dateString: string): Date | null {
+export function parseSerperDate(dateString: string, logger?: Logger): Date | null {
   if (!dateString) {
     return null;
   }
@@ -176,10 +200,14 @@ export function parseSerperDate(dateString: string): Date | null {
        return parsedDate;
     }
 
-    logger.warn({ dateString }, 'Failed to parse Serper date string after trying multiple formats.');
+    if (logger) {
+      logger.warn({ dateString }, 'Failed to parse Serper date string after trying multiple formats.');
+    }
     return null;
   } catch (error) {
-    logger.error({ dateString, err: error }, 'Error parsing Serper date string.');
+    if (logger) {
+      logger.error({ dateString, err: error }, 'Error parsing Serper date string.');
+    }
     return null;
   }
 }

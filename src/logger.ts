@@ -1,7 +1,6 @@
 import { nanoid } from 'nanoid';
 import pino from 'pino';
 import type { Logger } from 'pino';
-import type { Env } from './types/cloudflare';
 
 /** Determines the log level based on environment bindings. */
 const getLogLevel = (env: Env) =>
