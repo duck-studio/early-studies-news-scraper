@@ -2,6 +2,20 @@
 
 A TypeScript-based API service built with [Hono](https://hono.dev/) and deployed on [Cloudflare Workers](https://workers.cloudflare.com/) that aggregates news articles from multiple publications using the [Serper API](https://serper.dev/).
 
+## Testing
+
+The project includes basic tests that verify core functionality:
+
+- Authentication with bearer token
+- Correct counting of results
+
+### Running Tests
+
+```bash
+# Run tests with mocked responses
+pnpm test
+```
+
 ## Features
 
 - Concurrent fetching of news articles from multiple publication URLs using `p-limit`.

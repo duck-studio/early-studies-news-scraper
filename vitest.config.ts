@@ -1,13 +1,20 @@
-import { defineConfig } from 'vitest/config';
+import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
-export default defineConfig({
+export default defineWorkersConfig({
   test: {
-    environment: 'node',
-    include: ['src/tests/**/*.test.ts'],
-    globals: true,
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+    poolOptions: {
+      workers: {
+        wrangler: { configPath: "./wrangler.toml" },
+        miniflare: {
+          // Add any bindings needed for tests
+          bindings: {
+            // We'll set this in our tests
+            SERPER_API_KEY: "test-key",
+            BEARER_TOKEN: "test-token"
+          },
+        },
+      },
     },
+    include: ['src/tests/basic.test.ts'],
   },
 });

@@ -14,7 +14,6 @@
     "types": "npx wrangler types",
     "check": "biome check --apply .",
     "test": "vitest run",
-    "test:watch": "vitest",
     "generate-types": "wrangler types > src/types/cloudflare.d.ts"
   },
   "keywords": [],
@@ -31,17 +30,17 @@
     "p-limit": "^4.0.0",
     "pino": "^9.2.0",
     "zod": "^3.24.2",
-    "zod-openapi": "^4.2.4"
+    "wrangler": "^4.4.0",
+    "zod-openapi": "^4.2.4",
+    "@cloudflare/vitest-pool-workers": "^0.8.9",
+    "vitest": "^3.0.9"
   },
   "devDependencies": {
     "@biomejs/biome": "1.5.3",
     "@types/async-retry": "^1.4.8",
     "@types/node": "^20.17.28",
-    "eslint": "^8.x",
     "pino-pretty": "^11.3.0",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.2",
-    "vitest": "^1.4.0",
-    "wrangler": "^4.4.0"
+    "typescript": "^5.5.2"
   }
 }
