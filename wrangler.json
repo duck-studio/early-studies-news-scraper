@@ -21,5 +21,11 @@
       "database_name": "early-studies-d1-database",
       "database_id": "770fd9ff-f7fa-40bc-9a83-b6036ddff67e"
     }
+  ],
+  "workflows": [
+    {
+      "binding": "PROCESS_NEWS_ITEM_WORKFLOW",
+      "class_name": "ProcessNewsItemWorkflow"
+    }
   ]
 } 

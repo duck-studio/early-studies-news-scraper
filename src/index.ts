@@ -15,6 +15,7 @@ import {
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
+import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 
 type Variables = {
   requestId: string;
@@ -326,3 +327,28 @@ app.onError((err, c) => {
 });
 
 export default app;
+
+// Define the Workflow parameters
+type ProcessNewsItemParams = {
+  headlineUrl: string;
+  // Add other parameters needed for processing
+};
+
+// Define the Workflow class
+export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
+  async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
+    console.log("Starting ProcessNewsItemWorkflow for:", event.payload.headlineUrl);
+
+    await step.do('initial-processing-step', async () => {
+      // In a real scenario, you'd perform actions like:
+      // - Fetching the full article content
+      // - Analyzing the content (e.g., sentiment analysis, entity extraction)
+      // - Storing results in the database (this.env.DB)
+      console.log('Processing step for:', event.payload.headlineUrl);
+      // Return some state if needed for subsequent steps
+      return { processed: true };
+    });
+
+    console.log("Finished ProcessNewsItemWorkflow for:", event.payload.headlineUrl);
+  }
+}
