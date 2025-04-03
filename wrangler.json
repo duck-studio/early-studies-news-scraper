@@ -5,6 +5,16 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "routes": [
+    {
+      "pattern": "api.earlystudies.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "early-studies-api.workers.dev",
+      "custom_domain": false
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
