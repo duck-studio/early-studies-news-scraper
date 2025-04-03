@@ -13,6 +13,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["src/**/*", "src/types/cloudflare.d.ts"],
+  "include": ["src/**/*", "worker-configuration.d.ts", "node"],
   "exclude": ["node_modules", "dist"]
 } 

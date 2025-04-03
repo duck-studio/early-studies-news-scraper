@@ -12,9 +12,8 @@ import {
 } from 'date-fns';
 import { createLogger } from './logger';
 import type { GeoParams } from './schema';
-import type { Env } from './types/cloudflare';
 
-const logger = createLogger({ NODE_ENV: 'development', LOG_LEVEL: 'info' } as Env);
+const logger = createLogger({ NODE_ENV: 'development', LOG_LEVEL: 'info' } as Partial<Env>);
 
 /**
  * Converts a user-friendly date range option and optional custom TBS

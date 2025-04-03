@@ -11,8 +11,10 @@
     "start": "node dist/index.js",
     "lint": "biome lint .",
     "format": "biome format --write .",
+    "types": "npx wrangler types",
     "check": "biome check --apply .",
-    "test": "jest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "generate-types": "wrangler types > src/types/cloudflare.d.ts"
   },
   "keywords": [],
@@ -33,13 +35,13 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.5.3",
-    "@cloudflare/workers-types": "^4.20240208.0",
     "@types/async-retry": "^1.4.8",
-    "@types/node": "^20.14.9",
+    "@types/node": "^20.17.28",
     "eslint": "^8.x",
     "pino-pretty": "^11.3.0",
     "tsx": "^4.16.2",
     "typescript": "^5.5.2",
-    "wrangler": "^3.28.1"
+    "vitest": "^1.4.0",
+    "wrangler": "^4.4.0"
   }
 }

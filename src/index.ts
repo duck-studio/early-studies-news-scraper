@@ -13,7 +13,6 @@ import {
   type TransformedNewsItem,
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
-import type { Env } from './types/cloudflare';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from './utils';
 
 type Variables = {
