@@ -4,12 +4,13 @@ import { isWithinInterval } from 'date-fns';
 import { Hono } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
 import { resolver } from 'hono-openapi/zod';
+import type { Logger } from 'pino';
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
 import {
   ErrorResponseSchema,
-  SearchRequestSchema,
-  SearchResponseSchema,
+  HeadlinesFetchRequestSchema,
+  HeadlinesFetchResponseSchema,
   type TransformedNewsItem,
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
@@ -17,6 +18,7 @@ import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToke
 
 type Variables = {
   requestId: string;
+  logger: Logger;
 };
 
 const app = new Hono<{ Variables: Variables; Bindings: Env }>();
@@ -27,10 +29,10 @@ app.use('*', async (c, next) => {
     const requestId = crypto.randomUUID();
     const requestLogger = createRequestLogger(logger, requestId);
     c.set('requestId', requestId);
+    c.set('logger', requestLogger);
     requestLogger.info('Request received', {
       method: c.req.method,
       path: c.req.path,
-      headers: Object.fromEntries(c.req.raw.headers.entries()),
     });
     await next();
   } catch (error) {
@@ -41,10 +43,8 @@ app.use('*', async (c, next) => {
 
 app.get('/', async (c) => {
   try {
-    const logger = createLogger(c.env);
-    const requestLogger = createRequestLogger(logger, c.get('requestId'));
-    requestLogger.info('Root route accessed', {
-      env: c.env,
+    const logger = c.get('logger');
+    logger.info('Root route accessed', {
       headers: Object.fromEntries(c.req.raw.headers.entries()),
     });
     return c.json({
@@ -54,15 +54,13 @@ app.get('/', async (c) => {
       openapi: '/openapi',
     });
   } catch (error) {
-    console.error('Error in root route:', error);
+    const logger = c.get('logger');
+    logger.error('Error in root route:', error);
     throw error;
   }
 });
 
-app.get('/favicon.ico', (c) => {
-  const logger = createLogger(c.env);
-  const requestLogger = createRequestLogger(logger, c.get('requestId'));
-  requestLogger.info('Favicon requested');
+app.get('/favicon.ico', () => {
   return new Response(null, { status: 204 }); 
 });
 
@@ -102,11 +100,10 @@ app.get(
 );
 
 app.post(
-  '/search',
+  '/headlines/fetch',
   async (c, next) => {
-    const logger = createLogger(c.env);
-    const requestLogger = createRequestLogger(logger, c.get('requestId'));
-    const {missing, valid} = validateToken(c.req.header('Authorization'), c.env.BEARER_TOKEN, requestLogger);
+    const logger = c.get('logger');
+    const {missing, valid} = validateToken(c.req.header('Authorization'), `Bearer ${c.env.BEARER_TOKEN}`, logger);
     if (missing) {
       return c.json({ error: 'Missing bearer token' }, 401);
     }
@@ -116,14 +113,14 @@ app.post(
     await next();
   },
   describeRoute({
-    description: 'Search for news headlines from one or more publications',
-    tags: ['Search'],
+    description: 'Fetch news headlines from one or more publications',
+    tags: ['Headlines'],
     security: [{ bearerAuth: [] }],
     request: {
       body: {
         content: {
           'application/json': {
-            schema: resolver(SearchRequestSchema),
+            schema: resolver(HeadlinesFetchRequestSchema),
             example: {
               publicationUrls: ['https://bbc.co.uk'],
               region: 'UK',
@@ -139,7 +136,7 @@ app.post(
         description: 'Successful search results',
         content: {
           'application/json': {
-            schema: resolver(SearchResponseSchema),
+            schema: resolver(HeadlinesFetchResponseSchema),
           },
         },
       },
@@ -161,34 +158,31 @@ app.post(
       },
     },
   }),
-  zValidator('json', SearchRequestSchema),
+  zValidator('json', HeadlinesFetchRequestSchema),
   async (c) => {
-    const logger = createLogger(c.env);
-    const requestLogger = createRequestLogger(logger, c.get('requestId'));
-    const body = c.req.valid('json');
-
-    requestLogger.info('Received search request', { body });
+    const logger = c.get('logger');
+    const {dateRangeOption, customTbs, region, publicationUrls, maxQueriesPerPublication, flattenResults} = c.req.valid('json');
 
     if (!c.env.SERPER_API_KEY) {
       const error = new Error('SERPER_API_KEY environment variable is not set');
-      requestLogger.error('Environment configuration error', { error });
+      logger.error('Environment configuration error', { error });
       throw error;
     }
 
-    const dateRange = getDateRange(body.dateRangeOption);
+    const dateRange = getDateRange(dateRangeOption);
 
     try {
       const fetchPublicationWithLimit = (url: string) => 
         fetchAllPagesForUrl(
           url,
-          getTbsString(body.dateRangeOption, body.customTbs),
-          getGeoParams(body.region),
+          getTbsString(dateRangeOption, customTbs),
+          getGeoParams(region),
           c.env.SERPER_API_KEY,
-          body.maxQueriesPerPublication,
-          requestLogger
+          maxQueriesPerPublication,
+          logger
         );
 
-      const publicationPromises = body.publicationUrls.map(url => 
+      const publicationPromises = publicationUrls.map(url => 
         publicationLimit(() => fetchPublicationWithLimit(url))
       );
       
@@ -240,7 +234,7 @@ app.post(
             const parsedDate = parseSerperDate(item.publicationDate);
             const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
             if (!keep && parsedDate) {
-              requestLogger.debug({ 
+              logger.debug({ 
                 headline: item.headline, 
                 publicationDate: item.publicationDate, 
                 parsedDate: parsedDate.toISOString(),
@@ -248,7 +242,7 @@ app.post(
                 rangeEnd: dateRange.end.toISOString(), 
               }, 'Filtering result: Outside date range');
             } else if (!parsedDate) {
-              requestLogger.debug({ 
+              logger.debug({ 
                 headline: item.headline, 
                 publicationDate: item.publicationDate 
               }, 'Filtering result: Could not parse date');
@@ -263,7 +257,7 @@ app.post(
 
       const filteredOutCount = totalItemsBeforeFiltering - totalItemsAfterFiltering;
       if (filteredOutCount > 0) {
-        requestLogger.info(
+        logger.info(
           { filteredOutCount, totalItemsBeforeFiltering, totalItemsAfterFiltering },
           `Filtered out ${filteredOutCount} results based on publication date.`
         );
@@ -275,7 +269,7 @@ app.post(
       const successCount = results.filter((r) => r.status === 'fulfilled').length;
       const failureCount = results.filter((r) => r.status === 'rejected').length;
 
-      requestLogger.info('Search completed successfully', {
+      logger.info('Search completed successfully', {
         totalResults,
         totalCreditsConsumed,
         totalQueriesMade,
@@ -297,7 +291,7 @@ app.post(
         })),
       });
 
-      const finalResults = body.flattenResults ? results.flatMap((r) => r.results) : results;
+      const finalResults = flattenResults ? results.flatMap((r) => r.results) : results;
 
       return c.json({
         results: finalResults,
@@ -310,16 +304,16 @@ app.post(
         },
       });
     } catch (error) {
-      requestLogger.error('Search failed', { error });
+      const logger = c.get('logger');
+      logger.error('Search failed', { error });
       return c.json({ error: 'Failed to fetch news articles' }, 500);
     }
   }
 );
 
 app.onError((err, c) => {
-  const logger = createLogger(c.env);
-  const requestLogger = createRequestLogger(logger, c.get('requestId'));
-  requestLogger.error('Unhandled error', {
+  const logger = c.get('logger');
+  logger.error('Unhandled error', {
     error: err,
     errorName: err.name,
     errorMessage: err.message,

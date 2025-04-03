@@ -1,7 +1,7 @@
 {
-  "name": "hono-serper-search",
+  "name": "early-studies-api",
   "version": "1.0.0",
-  "description": "Hono API for concurrent news article fetching using Serper API",
+  "description": "Hono API for Early Studies",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

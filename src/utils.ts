@@ -20,6 +20,7 @@ export function validateToken(userToken: string | undefined | null, expectedToke
   if (!userToken) {
     return { missing: true, valid: false };
   }
+ 
   if (userToken !== expectedToken) {
     if (logger) {
       logger.warn('Invalid token');

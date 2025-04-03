@@ -72,7 +72,7 @@ const FetchFailureSchema = BaseResponseSchema.extend({
 const FetchResultSchema = z.discriminatedUnion('status', [FetchSuccessSchema, FetchFailureSchema]);
 
 // --- Request Schemas ---
-const SearchRequestBaseSchema = z.object({
+const HeadlinesFetchRequestBaseSchema = z.object({
   publicationUrls: PublicationUrlsSchema,
   region: RegionSchema,
   dateRangeOption: DateRangeEnumSchema.optional()
@@ -94,7 +94,7 @@ const SearchRequestBaseSchema = z.object({
 });
 
 // --- Hono Request Input Schema ---
-export const SearchRequestSchema = SearchRequestBaseSchema.refine(
+export const HeadlinesFetchRequestSchema = HeadlinesFetchRequestBaseSchema.refine(
   (data) =>
     data.dateRangeOption !== 'Custom' ||
     (typeof data.customTbs === 'string' && data.customTbs.length > 0),
@@ -106,7 +106,7 @@ export const SearchRequestSchema = SearchRequestBaseSchema.refine(
 );
 
 // --- OpenAPI Response Schemas ---
-const SearchSummarySchema = z.object({
+const HeadlinesFetchSummarySchema = z.object({
   totalResults: z.number(),
   totalCreditsConsumed: z.number(),
   totalQueriesMade: z.number(),
@@ -114,9 +114,9 @@ const SearchSummarySchema = z.object({
   failureCount: z.number(),
 });
 
-export const SearchResponseSchema = z.object({
+export const HeadlinesFetchResponseSchema = z.object({
   results: z.array(TransformedNewsItemSchema),
-  summary: SearchSummarySchema,
+  summary: HeadlinesFetchSummarySchema,
 });
 
 export const ErrorResponseSchema = z.object({
@@ -124,8 +124,8 @@ export const ErrorResponseSchema = z.object({
 });
 
 // --- Derived Types ---
-export type SearchRequestInput = z.input<typeof SearchRequestSchema>;
-export type ValidatedSearchData = z.output<typeof SearchRequestSchema>;
+export type HeadlinesFetchRequestInput = z.input<typeof HeadlinesFetchRequestSchema>;
+export type ValidatedHeadlinesFetchData = z.output<typeof HeadlinesFetchRequestSchema>;
 export type SerperNewsItem = z.infer<typeof SerperNewsItemSchema>;
 export type SerperNewsResult = z.infer<typeof SerperNewsResultSchema>;
 export type FetchResult = z.infer<typeof FetchResultSchema>;
