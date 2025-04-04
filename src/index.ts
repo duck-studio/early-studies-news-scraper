@@ -1193,7 +1193,25 @@ app.onError((err, c) => {
   });
 });
 
-export default app;
+export default {
+  // Existing fetch handler
+  fetch: app.fetch,
+
+  // New scheduled handler
+  async scheduled(event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {
+    // Create a basic logger for scheduled tasks (doesn't have request context)
+    // We might want a more sophisticated way to get bindings/logger later
+    console.log(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
+
+    // Add your scheduled task logic here
+    // For now, just logging
+
+    console.log("Scheduled task finished.");
+
+    // No explicit return needed unless there's an error to handle
+    // Use ctx.waitUntil() for async tasks that need to complete after the handler returns
+  }
+}; // Ensure export default is an object
 
 // Define the Workflow parameters
 type ProcessNewsItemParams = {

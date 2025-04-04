@@ -29,5 +29,8 @@
       "binding": "PROCESS_NEWS_ITEM_WORKFLOW",
       "class_name": "ProcessNewsItemWorkflow"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  }
 } 
