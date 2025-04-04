@@ -1,9 +1,8 @@
-import { zValidator } from '@hono/zod-validator';
 import { apiReference } from '@scalar/hono-api-reference';
 import { isWithinInterval } from 'date-fns';
 import { type Context, Hono, type Next } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
-import { resolver } from 'hono-openapi/zod';
+import { resolver, validator as zValidator } from 'hono-openapi/zod';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 import {
@@ -20,22 +19,22 @@ import {
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
 import {
+  DeleteHeadlineBodySchema, 
+  DeletePublicationBodySchema, 
+  DeleteRegionBodySchema, 
   ErrorResponseSchema,
-  GetHeadlinesQuerySchema,
-  GetPublicationsQuerySchema,
   HeadlineSchema,
   HeadlinesFetchRequestSchema,
   HeadlinesFetchResponseSchema,
+  HeadlinesQueryBodySchema, 
   HeadlinesQueryResponseSchema,
-  IdParamSchema,
   InsertHeadlineSchema,
   InsertPublicationSchema,
   InsertRegionSchema,
-  NameParamSchema,
   PublicationSchema,
+  PublicationsQueryBodySchema, 
   RegionBaseSchema,
   type TransformedNewsItem,
-  UrlParamSchema,
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
@@ -144,11 +143,18 @@ const authMiddleware = async (c: Context<{ Variables: Variables; Bindings: Env }
 // --- Database CRUD Endpoints ---
 
 // --- Publications ---
-app.get(
-  '/publications',
+app.post(
+  '/publications/query',
   describeRoute({
-    description: 'Get a list of publications, optionally filtered by category or regions',
+    description: 'Get a list of publications using filters in the request body',
     tags: ['Database - Publications'],
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: PublicationsQueryBodySchema,
+        }
+      }
+    },
     responses: {
       200: {
         description: 'List of publications',
@@ -158,13 +164,14 @@ app.get(
           },
         },
       },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
-  zValidator('query', GetPublicationsQuerySchema),
+  zValidator('json', PublicationsQueryBodySchema),
   async (c) => {
     const logger = c.get('logger');
-    const filters = c.req.valid('query');
+    const filters = c.req.valid('json');
     try {
       const publications = await getPublications(c.env.DB, filters);
       return c.json(publications);
@@ -223,39 +230,46 @@ app.post(
 );
 
 app.delete(
-  '/publications/:url',
+  '/publications',
   authMiddleware,
   describeRoute({
-    description: 'Delete a publication by its URL',
+    description: 'Delete a publication using its URL provided in the request body',
     tags: ['Database - Publications'],
-    security: [{ bearerAuth: [] }], 
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: DeletePublicationBodySchema,
+        }
+      }
+    },
     responses: {
       200: {
         description: 'Publication deleted successfully',
         content: {
           'application/json': {
-            schema: PublicationSchema, // Returns the deleted record
+            schema: PublicationSchema,
           },
         },
       },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
       404: { description: 'Publication not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
-  zValidator('param', UrlParamSchema),
+  zValidator('json', DeletePublicationBodySchema),
   async (c) => {
     const logger = c.get('logger');
-    const { url } = c.req.valid('param');
-    const decodedUrl = decodeURIComponent(url); // Decode the URL from param
+    const { url } = c.req.valid('json');
     try {
-      const [deleted] = await deletePublication(c.env.DB, decodedUrl);
+      const [deleted] = await deletePublication(c.env.DB, url);
       if (!deleted) {
         return c.json({ error: 'Publication not found' }, 404);
       }
       return c.json(deleted);
     } catch (error) {
-      logger.error('Error deleting publication', { error, url: decodedUrl });
+      logger.error('Error deleting publication', { error, url });
       return c.json({ error: 'Failed to delete publication' }, 500);
     }
   }
@@ -337,12 +351,18 @@ app.post(
 );
 
 app.delete(
-  '/regions/:name',
+  '/regions',
   authMiddleware,
   describeRoute({
-    description: 'Delete a region by its name',
+    description: 'Delete a region using its name provided in the request body',
     tags: ['Database - Regions'],
     security: [{ bearerAuth: [] }],
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: DeleteRegionBodySchema,
+        }
+      }
     },
     responses: {
       200: {
@@ -353,35 +373,42 @@ app.delete(
           },
         },
       },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
       404: { description: 'Region not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
-  zValidator('param', NameParamSchema),
+  zValidator('json', DeleteRegionBodySchema),
   async (c) => {
     const logger = c.get('logger');
-    const { name } = c.req.valid('param');
-    const decodedName = decodeURIComponent(name);
+    const { name } = c.req.valid('json');
     try {
-      const [deleted] = await deleteRegion(c.env.DB, decodedName);
+      const [deleted] = await deleteRegion(c.env.DB, name);
       if (!deleted) {
         return c.json({ error: 'Region not found' }, 404);
       }
       return c.json(RegionBaseSchema.parse(deleted));
     } catch (error) {
-      logger.error('Error deleting region', { error, name: decodedName });
+      logger.error('Error deleting region', { error, name });
       return c.json({ error: 'Failed to delete region' }, 500);
     }
   }
 );
 
 // --- Headlines ---
-app.get(
-  '/headlines',
+app.post(
+  '/headlines/query',
   describeRoute({
-    description: 'Get a list of headlines, with filters and pagination',
+    description: 'Get a list of headlines using filters and pagination in the request body',
     tags: ['Database - Headlines'],
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: HeadlinesQueryBodySchema,
+        }
+      }
+    },
     responses: {
       200: {
         description: 'Paginated list of headlines',
@@ -391,19 +418,27 @@ app.get(
           },
         },
       },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
-  zValidator('query', GetHeadlinesQuerySchema),
+  zValidator('json', HeadlinesQueryBodySchema),
   async (c) => {
     const logger = c.get('logger');
-    const filters = c.req.valid('query');
-    // Convert date strings to Date objects if present
+    const body = c.req.valid('json');
+    
     const headlineFilters = {
-      ...filters,
-      startDate: filters.startDate ? new Date(filters.startDate) : undefined,
-      endDate: filters.endDate ? new Date(filters.endDate) : undefined,
+      startDate: body.startDate ? new Date(body.startDate) : undefined,
+      endDate: body.endDate ? new Date(body.endDate) : undefined,
+      categories: body.categories,
+      page: body.page,
+      pageSize: body.pageSize,
+      publicationFilters: {
+          category: body.publicationCategory,
+          regions: body.publicationRegions,
+      }
     };
+
     try {
       const headlines = await getHeadlines(c.env.DB, headlineFilters);
       return c.json(headlines);
@@ -461,7 +496,6 @@ app.post(
       return c.json(result, 201);
     } catch (error) {
       logger.error('Error upserting headline', { error, data: headlineData });
-      // Specific error for publication not found?
       if (error instanceof Error && error.message.includes('does not exist')) {
         return c.json({ error: error.message }, 400);
       }
@@ -471,30 +505,38 @@ app.post(
 );
 
 app.delete(
-  '/headlines/:id',
+  '/headlines',
   authMiddleware,
   describeRoute({
-    description: 'Delete a headline by its ID',
+    description: 'Delete a headline using its ID provided in the request body',
     tags: ['Database - Headlines'],
     security: [{ bearerAuth: [] }],
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: DeleteHeadlineBodySchema,
+        }
+      }
+    },
     responses: {
       200: {
         description: 'Headline deleted successfully',
         content: {
           'application/json': {
-            schema: HeadlineSchema, // Returns the deleted record
+            schema: HeadlineSchema,
           },
         },
       },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
       404: { description: 'Headline not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
-  zValidator('param', IdParamSchema),
+  zValidator('json', DeleteHeadlineBodySchema),
   async (c) => {
     const logger = c.get('logger');
-    const { id } = c.req.valid('param');
+    const { id } = c.req.valid('json');
     try {
       const [deleted] = await deleteHeadline(c.env.DB, id);
       if (!deleted) {
