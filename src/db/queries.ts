@@ -121,7 +121,7 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
       .where(inArray(schema.publicationRegions.regionName, filters.publicationFilters.regions));
     
     // Add condition to filter headlines based on the subquery results
-    conditions.push(inArray(schema.headlines.publicationId, regionPublicationsSubQuery));
+    conditions.push(inArray(schema.headlines.publicationUrl, regionPublicationsSubQuery));
   }
   if (filters?.categories && filters.categories.length > 0) {
     conditions.push(inArray(schema.headlines.category, filters.categories));
@@ -146,7 +146,7 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
       publicationUrl: schema.publications.url,
     })
     .from(schema.headlines)
-    .innerJoin(schema.publications, eq(schema.headlines.publicationId, schema.publications.url))
+    .innerJoin(schema.publications, eq(schema.headlines.publicationUrl, schema.publications.url))
     .where(whereCondition)
     .orderBy(desc(schema.headlines.normalizedDate)) // Order by date descending
     .limit(pageSize)
@@ -155,7 +155,7 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
   const countQuery = drizzleDb
     .select({ total: count() })
     .from(schema.headlines)
-    .innerJoin(schema.publications, eq(schema.headlines.publicationId, schema.publications.url))
+    .innerJoin(schema.publications, eq(schema.headlines.publicationUrl, schema.publications.url))
     .where(whereCondition);
 
   const [results, totalResult] = await Promise.all([
@@ -176,17 +176,18 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
 
 export async function upsertHeadline(db: D1Database, data: InsertHeadline) {
   const drizzleDb = drizzle(db, { schema });
+
+  if (!data.publicationUrl) {
+    throw new Error('Cannot upsert headline without a publicationUrl');
+  }  
+
   const publicationExists = await drizzleDb
     .select({ url: schema.publications.url })
     .from(schema.publications)
-    .where(eq(schema.publications.url, data.publicationId));
-
-  if (!data.publicationId) {
-    throw new Error('Cannot upsert headline without a publicationId');
-  }  
+    .where(eq(schema.publications.url, data.publicationUrl));
 
   if (publicationExists.length === 0) {
-    throw new Error(`Publication with URL ${data.publicationId} does not exist.`);
+    throw new Error(`Publication with URL ${data.publicationUrl} does not exist.`);
   }
 
   return await drizzleDb

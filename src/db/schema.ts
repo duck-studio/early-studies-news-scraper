@@ -35,8 +35,6 @@ export const headlineCategories = [
 export const publications = sqliteTable(
   'publications',
   {
-    id: text('id')
-      .$defaultFn(() => nanoid(8)),
     name: text('name').notNull(),
     url: text('url').primaryKey(),
     category: text('category', { enum: publicationCategories }),
@@ -89,7 +87,7 @@ export const headlines = sqliteTable(
     rawDate: text('raw_date'),
     normalizedDate: text('normalized_date'),
     category: text('category', { enum: headlineCategories }),
-    publicationId: text('publication_id')
+    publicationUrl: text('publication_url')
       .notNull()
       .references(() => publications.url, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp' })
@@ -100,7 +98,7 @@ export const headlines = sqliteTable(
       .$onUpdate(() => sql`(strftime('%s', 'now'))`),
   },
   (table) => [
-    index('headlines_publication_id_idx').on(table.publicationId),
+    index('headlines_publication_url_idx').on(table.publicationUrl),
     index('headlines_normalized_date_idx').on(table.normalizedDate),
     index('headlines_headline_idx').on(table.headline),
     index('headlines_headline_date_idx').on(table.headline, table.normalizedDate),
@@ -133,7 +131,7 @@ export const publicationRegionRelations = relations(publicationRegions, ({ one }
 
 export const headlineRelations = relations(headlines, ({ one }) => ({
   publication: one(publications, {
-    fields: [headlines.publicationId],
+    fields: [headlines.publicationUrl],
     references: [publications.url],
   }),
 }));

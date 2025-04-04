@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS regions (
 );
 
 CREATE TABLE IF NOT EXISTS publications (
-  id TEXT DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))), -- Approximation of nanoid via UUID v4 logic in SQL
   name TEXT NOT NULL,
   url TEXT PRIMARY KEY NOT NULL,
   category TEXT CHECK( category IN ('broadcaster','broadsheet','tabloid','digital','financial','magazinePeriodical','newsAgency','other') ),
@@ -61,34 +60,34 @@ CREATE INDEX IF NOT EXISTS headlines_category_idx ON headlines(category);
 INSERT OR IGNORE INTO regions (name) VALUES ('UK'), ('US');
 
 -- Seed Publications (Using INSERT OR IGNORE to avoid errors if they already exist)
-INSERT OR IGNORE INTO publications (id, url, name, category)
+INSERT OR IGNORE INTO publications (url, name, category)
 VALUES
-  ('0VrZ2G7e', 'bbc.co.uk', 'BBC UK', 'broadcaster'),
-  ('rF_6V8aR', 'bbc.com', 'BBC US', 'broadcaster'),
-  ('0wipPq8p', 'news.sky.com', 'Sky News', 'broadcaster'),
-  ('JIAK2abB', 'itv.com/news', 'ITV News', 'broadcaster'),
-  ('zuHz7K1O', 'channel4.com/news', 'Channel 4 News', 'broadcaster'),
-  ('iL9fva92', 'lbc.co.uk', 'LBC', 'broadcaster'),
-  ('bZf_anuD', 'talkradio.co.uk', 'TalkRadio', 'broadcaster'),
-  ('Vd85yZis', 'theguardian.com', 'The Guardian', 'broadsheet'),
-  ('5AAczT1c', 'telegraph.co.uk', 'The Telegraph', 'broadsheet'),
-  ('Hq0DyYXk', 'thetimes.co.uk', 'The Times', 'broadsheet'),
-  ('kF45uwCN', 'ft.com', 'Financial Times', 'financial'),
-  ('5rVE6jXH', 'economist.com', 'The Economist', 'magazinePeriodical'),
-  ('69e53qIa', 'observer.com', 'Observer (US)', 'digital'),
-  ('YtA3c_oU', 'independent.co.uk', 'The Independent', 'broadsheet'),
-  ('KY9ft5qa', 'thesun.co.uk', 'The Sun', 'tabloid'),
-  ('QHA1Ibtk', 'mirror.co.uk', 'Daily Mirror', 'tabloid'),
-  ('ngQEhco8', 'dailymail.co.uk', 'Daily Mail', 'tabloid'),
-  ('go6mnnO5', 'express.co.uk', 'Daily Express', 'tabloid'),
-  ('YepE_oz5', 'dailystar.co.uk', 'Daily Star', 'tabloid'),
-  ('E7_Gwns3', 'metro.co.uk', 'Metro', 'tabloid'),
-  ('CrE3lhyC', 'dailyrecord.co.uk', 'Daily Record', 'tabloid'),
-  ('3UXyvQNz', 'morningstaronline.co.uk', 'Morning Star', 'broadsheet'),
-  ('fvaMhzYH', 'inews.co.uk', 'i News', 'broadsheet'),
-  ('MGgw4B9C', 'huffingtonpost.co.uk', 'Huffington Post UK', 'digital'),
-  ('SN_2aNB6', 'buzzfeed.com', 'Buzzfeed', 'digital'),
-  ('aV_4vVQq', 'vice.com', 'Vice', 'digital');
+  ('bbc.co.uk', 'BBC UK', 'broadcaster'),
+  ('bbc.com', 'BBC US', 'broadcaster'),
+  ('news.sky.com', 'Sky News', 'broadcaster'),
+  ('itv.com/news', 'ITV News', 'broadcaster'),
+  ('channel4.com/news', 'Channel 4 News', 'broadcaster'),
+  ('lbc.co.uk', 'LBC', 'broadcaster'),
+  ('talkradio.co.uk', 'TalkRadio', 'broadcaster'),
+  ('theguardian.com', 'The Guardian', 'broadsheet'),
+  ('telegraph.co.uk', 'The Telegraph', 'broadsheet'),
+  ('thetimes.co.uk', 'The Times', 'broadsheet'),
+  ('ft.com', 'Financial Times', 'financial'),
+  ('economist.com', 'The Economist', 'magazinePeriodical'),
+  ('observer.com', 'Observer (US)', 'digital'),
+  ('independent.co.uk', 'The Independent', 'broadsheet'),
+  ('thesun.co.uk', 'The Sun', 'tabloid'),
+  ('mirror.co.uk', 'Daily Mirror', 'tabloid'),
+  ('dailymail.co.uk', 'Daily Mail', 'tabloid'),
+  ('express.co.uk', 'Daily Express', 'tabloid'),
+  ('dailystar.co.uk', 'Daily Star', 'tabloid'),
+  ('metro.co.uk', 'Metro', 'tabloid'),
+  ('dailyrecord.co.uk', 'Daily Record', 'tabloid'),
+  ('morningstaronline.co.uk', 'Morning Star', 'broadsheet'),
+  ('inews.co.uk', 'i News', 'broadsheet'),
+  ('huffingtonpost.co.uk', 'Huffington Post UK', 'digital'),
+  ('buzzfeed.com', 'Buzzfeed', 'digital'),
+  ('vice.com', 'Vice', 'digital');
 
 -- Seed Publication Regions (Link publications to regions)
 INSERT OR IGNORE INTO publication_regions (publication_url, region_name)
