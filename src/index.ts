@@ -41,6 +41,9 @@ import {
   InsertHeadlineSchema,
   InsertPublicationSchema,
   InsertRegionSchema,
+  ManualSyncRequestSchema,
+  ManualSyncResponseDataSchema,
+  ManualSyncStdResponseSchema,
   PublicationsListResponseSchema,
   PublicationsQueryBodySchema,
   RegionSchema,
@@ -53,7 +56,7 @@ import {
   type TransformedNewsItem,
   createStandardResponseSchema,
 } from './schema';
-import type { FetchAllPagesResult, FetchResult } from './schema';
+import type { DateRangeEnum, FetchAllPagesResult, FetchResult } from './schema';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
 import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 
@@ -1197,181 +1200,275 @@ app.onError((err, c) => {
   });
 });
 
+// --- Refactored Headline Sync Logic ---
+
+// Define the structure of the summary object returned by the sync function
+type SyncSummary = z.infer<typeof ManualSyncResponseDataSchema>;
+
+async function performHeadlineSync(
+  env: Env,
+  logger: Logger,
+  dateRangeOption: DateRangeEnum,
+  customTbs: string | undefined,
+  maxQueriesPerPublication: number
+): Promise<SyncSummary> {
+    logger.info("Starting headline sync...", { dateRangeOption, maxQueriesPerPublication });
+
+    // Check for necessary environment variables
+    if (!env.DB) {
+      logger.error('Sync task failed: DB environment variable is not set.');
+      throw new Error('Server configuration error: DB binding missing.');
+    }
+    if (!env.SERPER_API_KEY) {
+       logger.error('Sync task failed: SERPER_API_KEY environment variable is not set.');
+       throw new Error('Server configuration error: SERPER_API_KEY missing.');
+    }
+     if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
+       logger.error('Sync task failed: PROCESS_NEWS_ITEM_WORKFLOW binding is not set.');
+       throw new Error('Server configuration error: PROCESS_NEWS_ITEM_WORKFLOW binding missing.');
+    }
+
+    try {
+         // 1. Get Publication URLs and IDs
+        const publications = await getPublications(env.DB);
+        if (!publications || publications.length === 0) {
+            logger.info('No publications found in the database. Skipping sync.');
+            return {
+                publicationsFetched: 0,
+                totalHeadlinesFetched: 0,
+                headlinesWithinDateRange: 0,
+                workflowsTriggered: 0,
+                workflowErrors: 0,
+                dateRange: { start: new Date(0).toISOString(), end: new Date(0).toISOString() } // Placeholder range
+            };
+        }
+        // Create a map for easy ID lookup
+        const publicationUrlToIdMap = new Map<string, string>();
+        for (const pub of publications) {
+            if (pub.id && pub.url) { // Ensure ID and URL exist
+                publicationUrlToIdMap.set(pub.url, pub.id);
+            }
+        }
+        const publicationUrls = Array.from(publicationUrlToIdMap.keys());
+        logger.info(`Found ${publicationUrls.length} publications to fetch.`);
+
+        // 2. Setup Fetching Logic
+        const fetchLimit = pLimit(5); // Limit concurrent fetches to Serper
+        const region = 'UK'; // Defaulting to UK, make configurable if needed
+        const tbs = getTbsString(dateRangeOption, customTbs);
+        const geoParams = getGeoParams(region);
+        const dateRange = getDateRange(dateRangeOption);
+
+        const fetchPromises = publicationUrls.map(url =>
+            fetchLimit(() => fetchAllPagesForUrl(
+                `https://${url}`,
+                tbs,
+                geoParams,
+                env.SERPER_API_KEY,
+                maxQueriesPerPublication,
+                logger
+            ))
+        );
+
+        // 3. Execute Fetches
+        logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
+        const fetchResults = await Promise.all(fetchPromises);
+        logger.info('Finished fetching headlines.');
+
+        // 4. Flatten and Process Results, Trigger Workflows
+        let headlinesFilteredCount = 0;
+        let workflowsTriggered = 0;
+        let workflowErrors = 0;
+        const workflowLimit = pLimit(10); // Limit concurrent workflow creations
+        const workflowPromises: Promise<unknown>[] = [];
+
+        // Flatten results and add publicationId
+        const processedHeadlines = fetchResults.flatMap(result => {
+            // Using debug logging for potentially large result objects
+            logger.debug({ url: result.url, hasError: !!result.error }, 'Processing fetch result');
+            if (result.error) {
+                logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
+                return []; // Skip failed fetches
+            }
+            const urlWithoutProtocol = result.url.replace('https://', '');
+            const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
+            if (!publicationId) {
+                logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
+                return []; // Skip if ID mapping failed
+            }
+            // Map each item to include the publicationId and ensure correct field mapping
+            const transformedResults = result.results.map(item => ({
+                url: item.link, // Use link from Serper result
+                headline: item.title, // Use title from Serper result
+                snippet: item.snippet ?? null,
+                source: item.source,
+                rawDate: item.date ?? null, // Use date from Serper result
+                normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
+                category: null, // Category determined later
+                publicationId, // Add the looked-up publication ID
+            }));
+            logger.debug({ url: result.url, count: transformedResults.length }, 'Transformed results for publication');
+            return transformedResults;
+        });
+
+        const totalFetched = processedHeadlines.length;
+        logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
+
+        // Iterate over the flattened and augmented headlines
+        for (const item of processedHeadlines) {
+            const parsedDate = parseSerperDate(item.rawDate);
+
+            // Filter by date range
+            if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
+                headlinesFilteredCount++;
+
+                // Construct complete params for the workflow
+                const workflowParams: ProcessNewsItemParams = {
+                    headlineUrl: item.url,
+                    publicationId: item.publicationId,
+                    headlineText: item.headline,
+                    snippet: item.snippet,
+                    source: item.source,
+                    rawDate: item.rawDate,
+                    normalizedDate: item.normalizedDate
+                };
+
+                workflowPromises.push(
+                    workflowLimit(async () => {
+                        try {
+                            const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
+                                params: workflowParams
+                            });
+                            logger.debug(`Triggered workflow ${instance.id} for headline: ${item.url}`);
+                            workflowsTriggered++;
+                        } catch (wfError) {
+                            logger.error(`Failed to trigger workflow for headline: ${item.url}`, { error: wfError });
+                            workflowErrors++;
+                        }
+                    })
+                );
+            } else if (parsedDate) {
+                 logger.debug({
+                    headline: item.headline,
+                    rawDate: item.rawDate,
+                    parsedDate: parsedDate.toISOString(),
+                    rangeStart: dateRange.start.toISOString(),
+                    rangeEnd: dateRange.end.toISOString(),
+                }, 'Sync: Filtering result outside date range');
+            } else {
+                 logger.debug({
+                    headline: item.headline,
+                    rawDate: item.rawDate
+                }, 'Sync: Filtering result, could not parse date');
+            }
+        }
+
+        await Promise.allSettled(workflowPromises);
+
+        const summary: SyncSummary = {
+            publicationsFetched: fetchResults.filter(r => !r.error).length,
+            totalHeadlinesFetched: totalFetched,
+            headlinesWithinDateRange: headlinesFilteredCount,
+            workflowsTriggered,
+            workflowErrors,
+            dateRange: { start: dateRange.start.toISOString(), end: dateRange.end.toISOString() },
+        };
+
+        logger.info('Sync task finished.', summary);
+        return summary;
+
+    } catch (error) {
+        logger.error('Error during sync task execution:', { error });
+        // Re-throw the error to be handled by the caller (endpoint or scheduled handler)
+        throw error;
+    }
+}
+
+// --- New Manual Sync Endpoint ---
+
+app.post(
+  '/sync',
+  authMiddleware,
+  describeRoute({
+    description: 'Manually trigger a headline sync operation for a specified date range.',
+    tags: ['Sync'],
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      content: { 'application/json': { schema: ManualSyncRequestSchema } }
+    },
+    responses: {
+       200: {
+         description: 'Sync operation completed successfully.',
+         content: { 'application/json': { schema: ManualSyncStdResponseSchema } },
+       },
+       400: { description: 'Bad Request (Invalid Input)', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_Sync') } } },
+       401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_Sync') } } },
+       500: { description: 'Internal Server Error (Sync Failed)', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_Sync') } } },
+    },
+  }),
+  zValidator('json', ManualSyncRequestSchema),
+  async (c) => {
+    const { dateRangeOption, customTbs, maxQueriesPerPublication } = c.req.valid('json');
+    const logger = c.get('logger');
+
+    try {
+      // Run the sync logic asynchronously without blocking the response
+      // Note: If the sync takes longer than the Worker execution limit (~30s), 
+      // it might be terminated prematurely. For longer tasks, consider Durable Objects or queues.
+      const syncSummary = await performHeadlineSync(
+        c.env,
+        logger, 
+        dateRangeOption,
+        customTbs,
+        maxQueriesPerPublication
+      );
+
+      // Return the summary upon successful completion
+      return c.json({
+        data: syncSummary,
+        success: true,
+        error: null
+      }, 200);
+
+    } catch (error) {
+      logger.error('Manual sync request failed', { error });
+      // Return a generic 500 error for any failure during the sync
+      return c.json({
+        data: null,
+        success: false,
+        error: {
+          message: 'Failed to perform headline sync.',
+          code: 'SYNC_FAILED',
+          details: error instanceof Error ? error.message : String(error)
+        }
+      }, 500);
+    }
+  }
+);
+
 export default {
   // Existing fetch handler
   fetch: app.fetch,
 
   // Updated scheduled handler
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const logger = createLogger(env); // Create a logger instance
+    const logger = createLogger(env); // Create a logger instance outside waitUntil
     logger.info(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
 
-    // Wrap async work
     ctx.waitUntil((async () => {
-        logger.info("Starting scheduled headline fetch...");
-
-        // Check for necessary environment variables
-        if (!env.DB) {
-          logger.error('Scheduled task failed: DB environment variable is not set.');
-          return;
-        }
-        if (!env.SERPER_API_KEY) {
-           logger.error('Scheduled task failed: SERPER_API_KEY environment variable is not set.');
-           return;
-        }
-         if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
-           logger.error('Scheduled task failed: PROCESS_NEWS_ITEM_WORKFLOW binding is not set.');
-           return;
-        }
-
         try {
-             // 1. Get Publication URLs and IDs
-            const publications = await getPublications(env.DB);
-            if (!publications || publications.length === 0) {
-                logger.info('No publications found in the database. Exiting scheduled task.');
-                return;
-            }
-            // Create a map for easy ID lookup
-            const publicationUrlToIdMap = new Map<string, string>();
-            for (const pub of publications) {
-                if (pub.id && pub.url) { // Ensure ID and URL exist
-                    publicationUrlToIdMap.set(pub.url, pub.id);
-                }
-            }
-            const publicationUrls = Array.from(publicationUrlToIdMap.keys());
-            logger.info(`Found ${publicationUrls.length} publications to fetch.`);
-
-            // 2. Setup Fetching Logic
-            const fetchLimit = pLimit(5); // Limit concurrent fetches to Serper
-            const dateRangeOption = 'Past 24 Hours';
-            const region = 'UK'; // Defaulting to UK, make configurable if needed
-            const maxQueriesPerPublication = 5; // Default limit
-            const tbs = getTbsString(dateRangeOption, undefined);
-            const geoParams = getGeoParams(region);
-            const dateRange = getDateRange(dateRangeOption);
-
-            const fetchPromises = publicationUrls.map(url =>
-                fetchLimit(() => fetchAllPagesForUrl(
-                    `https://${url}`,
-                    tbs,
-                    geoParams,
-                    env.SERPER_API_KEY,
-                    maxQueriesPerPublication,
-                    logger
-                ))
+            // Call the refactored sync function with default parameters
+            await performHeadlineSync(
+                env, 
+                logger, 
+                'Past 24 Hours', // Default date range for cron
+                undefined,       // No custom TBS for cron
+                5                // Default max queries for cron
             );
-
-            // 3. Execute Fetches
-            logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
-            const fetchResults = await Promise.all(fetchPromises);
-            logger.info('Finished fetching headlines.');
-
-            // 4. Flatten and Process Results, Trigger Workflows
-            let headlinesFilteredCount = 0;
-            let workflowsTriggered = 0;
-            let workflowErrors = 0;
-            const workflowLimit = pLimit(10); // Limit concurrent workflow creations
-            const workflowPromises: Promise<unknown>[] = [];
-
-        
-            // Flatten results and add publicationId
-            const processedHeadlines = fetchResults.flatMap(result => {
-                console.log('result', JSON.stringify(result).substring(0, 200));
-                if (result.error) {
-                    logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
-                    return []; // Skip failed fetches
-                }
-                const urlWithoutProtocol = result.url.replace('https://', '');
-                const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
-                if (!publicationId) {
-                    logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
-                    return []; // Skip if ID mapping failed
-                }
-                // Map each item to include the publicationId and ensure correct field mapping
-
-                const transformedResults = result.results.map(item => ({
-                    url: item.link, // Use link from Serper result
-                    headline: item.title, // Use title from Serper result
-                    snippet: item.snippet ?? null,
-                    source: item.source,
-                    rawDate: item.date ?? null, // Use date from Serper result
-                    normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
-                    category: null, // Category determined later
-                    publicationId, // Add the looked-up publication ID
-                    // Add other relevant fields from 'item' if necessary
-                }));
-
-                console.log('transformed results', JSON.stringify(transformedResults).substring(0, 200));
-                return transformedResults;
-            });
-
-            console.log('processed headlines', JSON.stringify(processedHeadlines).substring(0, 200));
-
-            const totalFetched = processedHeadlines.length;
-            logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
-
-
-            // Iterate over the flattened and augmented headlines
-            for (const item of processedHeadlines) {
-                const parsedDate = parseSerperDate(item.rawDate);
-
-                // Filter by date range
-                if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
-                    headlinesFilteredCount++;
-
-                    // Construct complete params for the workflow using ProcessableHeadline fields
-                    const workflowParams: ProcessNewsItemParams = {
-                        headlineUrl: item.url, // Use item.url which comes from item.link
-                        publicationId: item.publicationId, // Already included
-                        headlineText: item.headline, // Use item.headline which comes from item.title
-                        snippet: item.snippet ?? null,
-                        source: item.source,
-                        rawDate: item.rawDate ?? null,
-                        normalizedDate: item.normalizedDate // Already calculated
-                    };
-
-                    workflowPromises.push(
-                        workflowLimit(async () => {
-                            try {
-                                const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
-                                    params: workflowParams // Pass full params
-                                });
-                                logger.debug(`Triggered workflow ${instance.id} for headline: ${item.url}`);
-                                workflowsTriggered++;
-                            } catch (wfError) {
-                                logger.error(`Failed to trigger workflow for headline: ${item.url}`, { error: wfError });
-                                workflowErrors++;
-                            }
-                        })
-                    );
-                } else if (parsedDate) {
-                     logger.debug({
-                        headline: item.headline,
-                        rawDate: item.rawDate,
-                        parsedDate: parsedDate.toISOString(),
-                        rangeStart: dateRange.start.toISOString(),
-                        rangeEnd: dateRange.end.toISOString(),
-                    }, 'Scheduled fetch: Filtering result outside date range');
-                } else {
-                     logger.debug({
-                        headline: item.headline,
-                        rawDate: item.rawDate
-                    }, 'Scheduled fetch: Filtering result, could not parse date');
-                }
-            }
-
-            await Promise.allSettled(workflowPromises);
-
-            logger.info('Scheduled task finished.', {
-                publicationsFetched: fetchResults.filter(r => !r.error).length, // Count only successful fetches
-                totalHeadlinesFetched: totalFetched,
-                headlinesWithinDateRange: headlinesFilteredCount,
-                workflowsTriggered,
-                workflowErrors
-            });
-
         } catch (error) {
-            logger.error('Error during scheduled task execution:', { error });
+            // Logging is handled within performHeadlineSync, 
+            // but we catch here to prevent waitUntil from throwing unhandled errors.
+            logger.error('Scheduled headline sync failed.', { error });
         }
     })()); // End ctx.waitUntil execution
   }

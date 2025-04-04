@@ -16,6 +16,10 @@ const DateRangeEnumSchema = z.enum([
   'Custom',
 ]);
 
+// Export the schema and inferred type
+export { DateRangeEnumSchema }; 
+export type DateRangeEnum = z.infer<typeof DateRangeEnumSchema>;
+
 // --- Serper API Schemas ---
 const SerperNewsItemSchema = z.object({
   title: z.string(),
@@ -451,3 +455,60 @@ export const ErrorResponseSchema = z.object({
     description: 'Additional error details that may help in debugging or understanding the error' 
   }),
 }).openapi({ ref: 'ErrorResponse' }); // Keep original ref for now
+
+// --- Schemas for Manual Sync Endpoint ---
+
+export const ManualSyncRequestSchema = z.object({
+  dateRangeOption: DateRangeEnumSchema
+    .describe("Date range for the sync operation."),
+  customTbs: z
+    .string()
+    .startsWith('tbs=cdr:1,cd_min:', {
+      message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:' (note: the 'tbs=' prefix will be automatically removed when sent to the API).",
+    })
+    .optional()
+    .describe("Required if dateRangeOption is 'Custom'. Format: 'tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY'"),
+  maxQueriesPerPublication: z
+    .number()
+    .int()
+    .positive('Max queries per publication must be a positive integer.')
+    .optional()
+    .default(5)
+    .describe('Maximum number of Serper API queries per publication URL.'),
+}).refine(
+  (data) =>
+    data.dateRangeOption !== 'Custom' ||
+    (typeof data.customTbs === 'string' && data.customTbs.length > 0),
+  {
+    message:
+      "The 'customTbs' parameter is required and must be non-empty when 'dateRangeOption' is 'Custom'.",
+    path: ['customTbs'],
+  }
+).openapi({ 
+    ref: 'ManualSyncRequest',
+    description: 'Parameters for manually triggering a headline sync operation.',
+    example: {
+        dateRangeOption: "Past Month",
+        maxQueriesPerPublication: 10
+    }
+});
+
+export const ManualSyncResponseDataSchema = z.object({
+    publicationsFetched: z.number().int().openapi({ description: 'Number of publications successfully fetched from Serper.' }),
+    totalHeadlinesFetched: z.number().int().openapi({ description: 'Total number of headlines initially fetched across all publications.' }),
+    headlinesWithinDateRange: z.number().int().openapi({ description: 'Number of headlines that fell within the specified date range.' }),
+    workflowsTriggered: z.number().int().openapi({ description: 'Number of ProcessNewsItemWorkflow instances successfully triggered.' }),
+    workflowErrors: z.number().int().openapi({ description: 'Number of errors encountered while triggering workflows.' }),
+    dateRange: z.object({ 
+        start: z.string().datetime(), 
+        end: z.string().datetime()
+    }).openapi({ description: 'The calculated date range used for the sync.' })
+}).openapi({ 
+    ref: 'ManualSyncResponseData',
+    description: 'Summary results of the manual sync operation.' 
+});
+
+export const ManualSyncStdResponseSchema = createStandardResponseSchema(
+    ManualSyncResponseDataSchema,
+    'ManualSyncResponse'
+);
