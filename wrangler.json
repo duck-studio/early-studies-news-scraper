@@ -15,7 +15,7 @@
   ],
   "workflows": [
     {
-      "name": "ProcessNewsItemWorkflow",
+      "name": "process-news-item-workflow",
       "binding": "PROCESS_NEWS_ITEM_WORKFLOW",
       "class_name": "ProcessNewsItemWorkflow"
     }
