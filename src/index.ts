@@ -10,9 +10,11 @@ import type { Logger } from 'pino';
 import { ZodError, z } from 'zod';
 import {
   type DatabaseError,
+  type InsertHeadline,
   deleteHeadline,
   deletePublication,
   deleteRegion,
+  getHeadlineByUrl,
   getHeadlineStats,
   getHeadlines,
   getPublications,
@@ -24,6 +26,7 @@ import {
   updatePublication,
   updateRegion,
 } from './db/queries';
+import { headlineCategories } from './db/schema';
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
 import {
@@ -913,7 +916,7 @@ app.post(
         );
 
       const publicationPromises = publicationUrls.map(url => 
-        publicationLimit(() => fetchPublicationWithLimit(url))
+        publicationLimit(() => fetchPublicationWithLimit(`https://${url}`))
       );
       
       const results: FetchResult[] = await Promise.all(
@@ -1249,7 +1252,7 @@ export default {
 
             const fetchPromises = publicationUrls.map(url =>
                 fetchLimit(() => fetchAllPagesForUrl(
-                    url,
+                    `https://${url}`,
                     tbs,
                     geoParams,
                     env.SERPER_API_KEY,
@@ -1289,16 +1292,22 @@ export default {
                     const parsedDate = parseSerperDate(item.date);
                     if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
                          totalFiltered++;
+                         // Construct complete params for the workflow
                          const workflowParams: ProcessNewsItemParams = {
                              headlineUrl: item.link,
                              publicationId: publicationId,
+                             headlineText: item.title,
+                             snippet: item.snippet ?? null,
+                             source: item.source,
+                             rawDate: item.date ?? null,
+                             normalizedDate: parsedDate ? parsedDate.toLocaleDateString('en-GB') : null
                          };
 
                          workflowPromises.push(
                             workflowLimit(async () => {
                                 try {
                                     const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
-                                         params: workflowParams
+                                         params: workflowParams // Pass full params
                                     });
                                     logger.debug(`Triggered workflow ${instance.id} for headline: ${item.link}`);
                                     workflowsTriggered++;
@@ -1329,47 +1338,97 @@ export default {
   }
 }; // Ensure export default is an object
 
-// Define the Workflow parameters
+// Define the Workflow parameters - include necessary fields for insertion
 type ProcessNewsItemParams = {
   headlineUrl: string;
   publicationId: string;
+  headlineText: string; 
+  snippet: string | null;
+  source: string;
+  rawDate: string | null;
+  normalizedDate: string | null;
+  // category will be assigned later by AI step
 };
 
-// Define the Workflow class (ensure params match)
+// Define the Workflow class (params type already updated)
 export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
-    // Use event.payload.headlineUrl, event.payload.publicationId etc.
-    console.log("Starting ProcessNewsItemWorkflow for:", event.payload.headlineUrl, "PubID:", event.payload.publicationId);
+    const { headlineUrl, publicationId, headlineText, snippet, source, rawDate, normalizedDate } = event.payload;
+    console.log("Starting ProcessNewsItemWorkflow for:", headlineUrl, "PubID:", publicationId);
 
-    const existingRecord = await step.do('check database for existing record', async () => {
-      console.log('Checking database for:', event.payload.headlineUrl);
-      // In a real scenario, query this.env.DB using publicationId and headlineUrl
-      return { exists: false }; // Placeholder
+    // --- Step 1: Check if headline exists --- 
+    const existingHeadline = await step.do('check database for existing record', async () => {
+      console.log('Checking database for URL:', headlineUrl);
+      if (!this.env.DB) {
+        console.error('Workflow Error: DB binding missing.');
+        throw new Error('Database binding (DB) is not configured for the workflow environment.');
+      }
+      try {
+        const record = await getHeadlineByUrl(this.env.DB, headlineUrl);
+        // Return only necessary info or the full record if needed for update
+        return record ? { exists: true, id: record.id } : { exists: false }; 
+      } catch (dbError) {
+        console.error('Workflow Step Error: Failed to query database', { headlineUrl, dbError });
+        // Throw error to force workflow step retry according to workflow's retry policy
+        throw dbError; 
+      }
     });
 
-    if (existingRecord.exists) {
-      console.log('Record already exists, skipping further processing for:', event.payload.headlineUrl);
-      return; // Exit the workflow
+    // --- Step 2: Decide Path (Update or Create) --- 
+    if (existingHeadline.exists) {
+      console.log('Record already exists, proceeding to update. ID:', existingHeadline.id, 'URL:', headlineUrl);
+      // --- Step 2a: Update Existing Record (Placeholder for now) --- 
+      await step.do('update existing record', async () => {
+         console.log('Placeholder: Update logic for existing headline ID:', existingHeadline.id);
+         // TODO: Implement update logic using updateHeadlineById if needed
+         // const updateData = { ... determine fields to update ... };
+         // await updateHeadlineById(this.env.DB, existingHeadline.id, updateData);
+         return { updated: true }; // Indicate success
+      });
+      console.log("Workflow finished: Updated existing record for", headlineUrl);
+      return; // End workflow execution
     }
 
-    const analysisResult = await step.do('analyze and tag headline', async () => {
-      console.log('Analyzing and tagging headline:', event.payload.headlineUrl);
-      // In a real scenario, perform analysis
-      return { tags: [], sentiment: null }; // Placeholder
+    // --- Step 3: Analyze New Headline (Placeholder AI) --- 
+    console.log('Headline does not exist, proceeding to analyze and create.', headlineUrl);
+    const analysisResult = await step.do('analyze and categorize headline', async () => {
+      console.log('Placeholder: AI analysis for headline:', headlineText);
+      // TODO: Replace with actual AI call (e.g., Workers AI)
+      // const aiCategory = await callWorkersAI(this.env.AI, headlineText);
+      const staticCategory = 'technology'; // Placeholder category
+      return { category: staticCategory }; 
+    });
+    const headlineCategory = analysisResult.category as (typeof headlineCategories)[number] | null;
+
+    // --- Step 4: Store New Headline in DB --- 
+    await step.do('store new headline in db', async () => {
+      console.log('Attempting to store new headline:', headlineUrl);
+      if (!this.env.DB) {
+         console.error('Workflow Error: DB binding missing for insert.');
+         throw new Error('Database binding (DB) is not configured for the workflow environment.');
+      }
+      const headlineData: Omit<InsertHeadline, 'id'> = {
+          url: headlineUrl,
+          headline: headlineText,
+          snippet: snippet,
+          source: source,
+          rawDate: rawDate,
+          normalizedDate: normalizedDate,
+          category: headlineCategory,
+          publicationId: publicationId,
+      };
+      try {
+         await insertHeadline(this.env.DB, headlineData);
+         console.log('Successfully inserted new headline:', headlineUrl);
+         return { inserted: true }; // Indicate success
+      } catch (dbError) {
+          console.error('Workflow Step Error: Failed to insert headline', { headlineData, dbError });
+          // Throw error to force retry
+          throw dbError;
+      }
     });
 
-    await step.do('store headline in db', async () => {
-      console.log('Storing headline in DB:', event.payload.headlineUrl);
-      // In a real scenario, insert into this.env.DB
-      console.log(
-        'Placeholder: Headline stored for',
-        event.payload.headlineUrl,
-        'with analysis:',
-        analysisResult
-      );
-    });
-
-    console.log("Finished ProcessNewsItemWorkflow for:", event.payload.headlineUrl);
+    console.log("Finished ProcessNewsItemWorkflow: Created new record for", headlineUrl);
   }
 }
 

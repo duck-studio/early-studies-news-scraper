@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev src/index.ts --local",
+    "dev:scheduled": "wrangler dev src/index.ts --local --test-scheduled",
+    "trigger:scheduled:local": "curl -X POST http://localhost:8787/__scheduled",
     "deploy": "wrangler deploy src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",

@@ -611,3 +611,27 @@ export async function getHeadlineStats(db: D1Database, startDate: Date, endDate:
     });
   }
 }
+
+// --- Headline Existence Check ---
+
+/**
+ * Efficiently checks if a headline exists based on its unique URL.
+ * Returns the existing headline object if found, otherwise null.
+ */
+export async function getHeadlineByUrl(db: D1Database, url: string): Promise<Headline | null> {
+  const drizzleDb = drizzle(db, { schema });
+  try {
+    const result = await drizzleDb
+      .select()
+      .from(schema.headlines)
+      .where(eq(schema.headlines.url, url))
+      .limit(1);
+    
+    return result[0] ?? null; // Return the first result or null if none found
+  } catch (error: unknown) {
+     throw createDbError('Failed to check headline existence by URL', { 
+        url: url,
+        errorMessage: getErrorMessage(error) 
+    });
+  }
+}
