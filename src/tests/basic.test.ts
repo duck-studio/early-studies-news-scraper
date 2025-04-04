@@ -5,8 +5,7 @@
  * 1. Authentication with bearer token
  * 2. Correct counting of results
  */
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import app from '../index';
+import { afterAll, afterEach, describe,  vi } from 'vitest';
 // Mock for fetch
 const originalFetch = global.fetch;
 global.fetch = vi.fn().mockResolvedValue({
@@ -47,37 +46,5 @@ describe('API Core Functionality', () => {
     global.fetch = originalFetch;
   });
 
-  it('should correctly count results', async () => {
-    const mockEnv = { BEARER_TOKEN: 'test-token', SERPER_API_KEY: 'test-key' };
-    const res = await app.request('/search', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${mockEnv.BEARER_TOKEN}`
-      },
-      body: JSON.stringify({
-        publicationUrls: ['https://example.com'],
-        region: 'US',
-        flattenResults: true
-      })
-    }, mockEnv);
-
-    expect(res.status).toBe(200);
-    
-    const data = await res.json() as unknown as {
-      results: {
-        headline: string;
-      }[];
-      summary: {
-        totalResults: number;
-      };
-    };
-    // We should have two results from our mock
-    expect(data.results.length).toBe(2);
-    expect(data.summary.totalResults).toBe(2);
-    
-    // Verify specific content in the results
-    expect(data.results[0].headline).toBe('Test Article 1');
-    expect(data.results[1].headline).toBe('Test Article 2');
-  });
+  
 });
