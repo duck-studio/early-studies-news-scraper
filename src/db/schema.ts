@@ -108,3 +108,10 @@ export const headlines = sqliteTable(
     index('headlines_category_idx').on(table.category),
   ]
 );
+
+export const schema = {
+  publications,
+  regions,
+  publicationRegions,
+  headlines,
+};
