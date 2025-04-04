@@ -60,12 +60,12 @@ export async function getPublications(db: D1Database, filters?: PublicationFilte
 }
 
 export async function upsertPublication(db: D1Database, data: InsertPublication) {
-  // const drizzleDb = drizzle(db, { schema });
-  // return await drizzleDb
-  //   .insert(publications)
-  //   .values(data)
-  //   .onConflictDoUpdate({ target: publications.url, set: data })
-  //   .returning();
+  const drizzleDb = drizzle(db, { schema });
+  return await drizzleDb
+    .insert(schema.publications)
+    .values(data)
+    .onConflictDoUpdate({ target: schema.publications.url, set: data })
+    .returning();
 }
 
 export async function deletePublication(db: D1Database, url: string) {
@@ -74,12 +74,12 @@ export async function deletePublication(db: D1Database, url: string) {
 }
 
 export async function upsertRegion(db: D1Database, data: InsertRegion) {
-  // const drizzleDb = drizzle(db, { schema });
-  // return await drizzleDb
-  //   .insert(regions)
-  //   .values(data)
-  //   .onConflictDoUpdate({ target: regions.name, set: data })
-  //   .returning();
+  const drizzleDb = drizzle(db, { schema });
+  return await drizzleDb
+    .insert(schema.regions)
+    .values(data)
+    .onConflictDoUpdate({ target: schema.regions.name, set: data })
+    .returning();
 }
 
 export async function deleteRegion(db: D1Database, name: string) {
@@ -165,21 +165,25 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
 }
 
 export async function upsertHeadline(db: D1Database, data: InsertHeadline) {
-  // const drizzleDb = drizzle(db, { schema });
-  // const publicationExists = await drizzleDb
-  //   .select({ url: publications.url })
-  //   .from(publications)
-  //   .where(eq(publications.url, data.publicationId));
+  const drizzleDb = drizzle(db, { schema });
+  const publicationExists = await drizzleDb
+    .select({ url: schema.publications.url })
+    .from(schema.publications)
+    .where(eq(schema.publications.url, data.publicationId));
 
-  // if (publicationExists.length === 0) {
-  //   throw new Error(`Publication with URL ${data.publicationId} does not exist.`);
-  // }
+  if (!data.publicationId) {
+    throw new Error('Cannot upsert headline without a publicationId');
+  }  
 
-  // return await drizzleDb
-  //   .insert(headlines)
-  //   .values(data)
-  //   .onConflictDoUpdate({ target: headlines.url, set: data })
-  //   .returning();
+  if (publicationExists.length === 0) {
+    throw new Error(`Publication with URL ${data.publicationId} does not exist.`);
+  }
+
+  return await drizzleDb
+    .insert(schema.headlines)
+    .values(data)
+    .onConflictDoUpdate({ target: schema.headlines.url, set: data })
+    .returning();
 }
 
 export async function deleteHeadline(db: D1Database, id: string) {
