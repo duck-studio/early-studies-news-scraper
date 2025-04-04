@@ -87,6 +87,12 @@ export async function deleteRegion(db: D1Database, name: string) {
   return await drizzleDb.delete(schema.regions).where(eq(schema.regions.name, name)).returning();
 }
 
+export async function getRegions(db: D1Database) {
+  const client = drizzle(db, { schema });
+  const results = await client.query.regions.findMany();
+  return results;
+}
+
 export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
   const drizzleDb = drizzle(db, { schema });
   const page = filters?.page ?? 1;

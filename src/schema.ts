@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { headlineCategories, publicationCategories } from './db/schema'; // Import enums
 
 // --- Base Schemas ---
 const RegionSchema = z.enum(['US', 'UK']);
@@ -146,3 +147,102 @@ export type GeoParams = {
   gl: string;
   location: string;
 };
+
+// --- Basic Schemas ---
+export const PublicationBaseSchema = z.object({
+    id: z.string().optional(), // Optional for insert, present for select
+    name: z.string(),
+    url: z.string().url(),
+    category: z.enum(publicationCategories).optional().nullable(),
+    createdAt: z.date().optional(), // Will be string date from DB, Zod handles conversion
+    updatedAt: z.date().optional(), // Will be string date from DB
+});
+
+export const RegionBaseSchema = z.object({
+    name: z.string(),
+});
+
+export const HeadlineBaseSchema = z.object({
+    id: z.string().optional(),
+    url: z.string().url(),
+    headline: z.string(),
+    snippet: z.string().optional().nullable(),
+    source: z.string(),
+    rawDate: z.string().optional().nullable(),
+    normalizedDate: z.string().optional().nullable(), // Stored as text, may be date-like string
+    category: z.enum(headlineCategories).optional().nullable(),
+    publicationId: z.string().url(), // Foreign key
+    createdAt: z.date().optional(),
+    updatedAt: z.date().optional(),
+});
+
+// --- Schema for Select/Response (reflecting potential DB types) ---
+export const PublicationSchema = PublicationBaseSchema.extend({
+    id: z.string(), // Required for select
+    createdAt: z.coerce.date(), // Coerce from DB format (likely integer/timestamp)
+    updatedAt: z.coerce.date(),
+    // Potentially add publicationRegions relationship if needed in response
+    publicationRegions: z.array(z.object({ regionName: z.string() })).optional(),
+});
+
+export const HeadlineSchema = HeadlineBaseSchema.extend({
+    id: z.string(), // Required for select
+    createdAt: z.coerce.date(),
+    updatedAt: z.coerce.date(),
+    // Add fields from Publication join for getHeadlines response
+    publicationName: z.string().optional(),
+    publicationCategory: z.enum(publicationCategories).optional().nullable(),
+    publicationUrl: z.string().url().optional(),
+});
+
+
+// --- Schema for Insert/Upsert (matching Insert types from queries.ts) ---
+export const InsertPublicationSchema = PublicationBaseSchema.omit({ id: true, createdAt: true, updatedAt: true }); // DB handles these
+export const InsertRegionSchema = RegionBaseSchema; // Simple, no changes needed
+export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdAt: true, updatedAt: true }); // DB handles these
+
+// --- Schemas for Route Parameters ---
+export const UrlParamSchema = z.object({ url: z.string().transform(val => encodeURIComponent(val)) }); // Ensure URL safe param
+export const NameParamSchema = z.object({ name: z.string().transform(val => encodeURIComponent(val)) });
+export const IdParamSchema = z.object({ id: z.string() });
+
+
+// --- Schemas for Query Parameters ---
+export const GetPublicationsQuerySchema = z.object({
+    category: z.enum(publicationCategories).optional(),
+    regions: z.preprocess(
+        (val) => (typeof val === 'string' ? val.split(',') : val), // Handle comma-separated string
+        z.array(z.string()).optional()
+    ),
+});
+
+export const GetHeadlinesQuerySchema = z.object({
+    startDate: z.string().datetime().optional(), // Expect ISO string
+    endDate: z.string().datetime().optional(),   // Expect ISO string
+    publicationCategory: z.enum(publicationCategories).optional(),
+    publicationRegions: z.preprocess(
+        (val) => (typeof val === 'string' ? val.split(',') : val),
+        z.array(z.string()).optional()
+    ),
+    categories: z.preprocess(
+        (val) => (typeof val === 'string' ? val.split(',') : val),
+        z.array(z.enum(headlineCategories)).optional()
+    ),
+    page: z.coerce.number().int().positive().optional().default(1),
+    pageSize: z.coerce.number().int().positive().optional().default(100), // Match default in query
+}).transform(values => ({ // Remap to match HeadlineFilters structure
+    ...values,
+    publicationFilters: {
+        category: values.publicationCategory,
+        regions: values.publicationRegions,
+    }
+}));
+
+// For use with getHeadlines endpoint which returns paginated data directly
+export const HeadlinesQueryResponseSchema = z.object({
+    data: z.array(HeadlineSchema), // Use the detailed HeadlineSchema
+    total: z.number().int(),
+    page: z.number().int(),
+    pageSize: z.number().int(),
+    totalPages: z.number().int(),
+});
