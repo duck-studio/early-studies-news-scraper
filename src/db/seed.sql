@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS headlines (
   raw_date TEXT,
   normalized_date TEXT,
   category TEXT CHECK( category IN ('breakingNews', 'politics', 'world', 'business', 'technology', 'science', 'health', 'sports', 'entertainment', 'lifestyle', 'environment', 'crime', 'education', 'artsCulture', 'opinion', 'other') ),
-  publication_id TEXT NOT NULL REFERENCES publications(url) ON DELETE CASCADE,
   created_at INTEGER DEFAULT (strftime('%s', 'now')) NOT NULL,
   updated_at INTEGER DEFAULT (strftime('%s', 'now')) NOT NULL
 );
@@ -49,7 +48,6 @@ END;
 CREATE INDEX IF NOT EXISTS publications_category_idx ON publications(category);
 CREATE INDEX IF NOT EXISTS pub_regions_pub_url_idx ON publication_regions(publication_url);
 CREATE INDEX IF NOT EXISTS pub_regions_region_name_idx ON publication_regions(region_name);
-CREATE INDEX IF NOT EXISTS headlines_publication_id_idx ON headlines(publication_id);
 CREATE INDEX IF NOT EXISTS headlines_normalized_date_idx ON headlines(normalized_date);
 CREATE INDEX IF NOT EXISTS headlines_headline_idx ON headlines(headline);
 CREATE INDEX IF NOT EXISTS headlines_headline_date_idx ON headlines(headline, normalized_date);
