@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { type ZodTypeAny, z } from 'zod';
 import "zod-openapi/extend"; // Import the extend for .openapi()
 import { headlineCategories, publicationCategories } from './db/schema'; // Import enums
 
@@ -121,14 +121,37 @@ export const HeadlinesFetchResponseSchema = z.object({
   summary: HeadlinesFetchSummarySchema,
 }).openapi({ ref: 'HeadlinesFetchResponse' });
 
-// Enhanced error schema with more details
-export const ErrorResponseSchema = z.object({
-  error: z.string().openapi({ description: 'Error message' }),
-  code: z.string().optional().openapi({ description: 'Error code for programmatic handling' }),
-  details: z.record(z.unknown()).optional().openapi({ 
-    description: 'Additional error details that may help in debugging or understanding the error' 
-  }),
-}).openapi({ ref: 'ErrorResponse' });
+// Updated Error Detail Schema (can be string or object)
+const ErrorDetailSchema = z.union([
+  z.string(),
+  z.record(z.unknown())
+]).openapi({ 
+    description: 'Details about the error, can be a simple message or a structured object (e.g., Zod validation issues)'
+});
+
+// Simplified Error Response Schema for the `error` field
+export const StandardErrorSchema = z.object({
+  message: z.string().openapi({ description: 'Primary error message' }),
+  code: z.string().optional().openapi({ description: 'Optional error code for programmatic handling' }),
+  details: ErrorDetailSchema.optional(),
+}).openapi({ 
+  ref: 'StandardError',
+  description: 'Structure for error details in standard responses' 
+});
+
+// Generic function to create the standard response schema
+export function createStandardResponseSchema<T extends ZodTypeAny>(
+  dataSchema: T,
+  refName?: string
+) {
+  const schema = z.object({
+    data: dataSchema.nullable().openapi({ description: 'Response data payload. Null if the operation failed or returned no data.' }),
+    success: z.boolean().openapi({ description: 'Indicates whether the API call was successful.' }),
+    error: StandardErrorSchema.nullable().openapi({ description: 'Error details if success is false, otherwise null.' })
+  });
+  // Apply the refName if provided for OpenAPI documentation
+  return refName ? schema.openapi({ ref: refName }) : schema;
+}
 
 // Define standard validation error messages
 const ValidationMessages = {
@@ -177,9 +200,9 @@ export type GeoParams = {
 export const PublicationBaseSchema = z.object({
     id: z.string().optional().openapi({ description: 'Internal unique ID (auto-generated)'}),
     name: z.string().min(1, { message: ValidationMessages.string.min(1) })
-      .openapi({ description: 'Name of the publication', example: 'The Example Times'}),
+      .openapi({ description: 'Name of the publication', example: 'The Guardian'}),
     url: z.string().url({ message: ValidationMessages.format.url })
-      .openapi({ description: 'Primary URL of the publication (must be unique)', example: 'https://example.com/news'}),
+      .openapi({ description: 'Primary URL of the publication (must be unique)', example: 'https://theguardian.com'}),
     category: z.enum(publicationCategories).optional().nullable()
       .openapi({ description: 'Category of the publication', example: 'broadsheet' }),
     createdAt: z.date().optional().openapi({ description: 'Timestamp of creation'}),
@@ -195,26 +218,26 @@ export const RegionBaseSchema = z.object({
 export const HeadlineBaseSchema = z.object({
     id: z.string().optional().openapi({ description: 'Internal unique ID (auto-generated)' }),
     url: z.string().url({ message: ValidationMessages.format.url })
-      .openapi({ description: 'Canonical URL of the headline (must be unique)', example: 'https://example.com/news/article123'}),
+      .openapi({ description: 'Canonical URL of the headline (must be unique)', example: 'https://www.bbc.co.uk/news/uk-politics-12345678'}),
     headline: z.string().min(1, { message: ValidationMessages.string.min(1) })
-      .openapi({ description: 'The headline text', example: 'Example Headline Takes World by Storm'}),
+      .openapi({ description: 'The headline text', example: 'UK Government Announces New Budget Measures'}),
     snippet: z.string().optional().nullable()
-      .openapi({ description: 'A short snippet or summary', example: 'An example snippet describing the headline.' }),
+      .openapi({ description: 'A short snippet or summary', example: 'Chancellor details spending plans for the upcoming fiscal year.' }),
     source: z.string().min(1, { message: ValidationMessages.string.min(1) })
-      .openapi({ description: 'The source or outlet reporting the headline', example: 'Example News Source' }),
+      .openapi({ description: 'The source or outlet reporting the headline', example: 'BBC News' }),
     rawDate: z.string().optional().nullable()
-      .openapi({ description: 'The original date string found for the headline', example: 'Jan 1, 2024' }),
+      .openapi({ description: 'The original date string found for the headline', example: '3 days ago' }),
     normalizedDate: z.string()
       .regex(/^\d{2}\/\d{2}\/\d{4}$/, { 
         message: "Normalized date must be in DD/MM/YYYY format, if provided" 
       })
       .optional()
       .nullable()
-      .openapi({ description: 'A date string in DD/MM/YYYY format for display or simple filtering', example: '01/01/2024'}),
+      .openapi({ description: 'A date string in DD/MM/YYYY format for display or simple filtering', example: '18/05/2024'}),
     category: z.enum(headlineCategories).optional().nullable()
-      .openapi({ description: 'Categorization of the headline topic', example: 'technology' }),
+      .openapi({ description: 'Categorization of the headline topic', example: 'politics' }),
     publicationId: z.string().min(1, { message: ValidationMessages.string.min(1) })
-      .openapi({ description: 'ID of the publication this headline belongs to', example: 'pub_abc123' }),
+      .openapi({ description: 'ID of the publication this headline belongs to', example: '0VrZ2G7e' }),
     createdAt: z.date().optional().openapi({ description: 'Timestamp of creation'}),
     updatedAt: z.date().optional().openapi({ description: 'Timestamp of last update'}),
 });
@@ -246,28 +269,28 @@ export const InsertPublicationSchema = PublicationBaseSchema.omit({ id: true, cr
     .openapi({ 
         ref: 'InsertPublication',
         example: { 
-            name: "The Example Times",
-            url: "https://example.com/news",
-            category: "broadsheet"
+            name: "The Example Herald", 
+            url: "https://exampleherald.com",
+            category: "digital"
         }
      }); 
 export const InsertRegionSchema = RegionBaseSchema.omit({ id: true })
     .openapi({ 
         ref: 'InsertRegion',
-        example: { name: "UK" }
+        example: { name: "Canada" }
     }); 
 export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdAt: true, updatedAt: true })
     .openapi({ 
         ref: 'InsertHeadline',
         example: { 
-            url: "https://www.bbc.co.uk/news/uk-politics-12345678", 
-            headline: "Example BBC Headline Update",
-            snippet: "An example snippet describing the latest political update from the BBC.",
+            url: "https://www.bbc.co.uk/news/science-environment-99887766", 
+            headline: "New Study Reveals Impact of Space Weather",
+            snippet: "Scientists release findings on solar flares and satellite communications.",
             source: "BBC News",
-            rawDate: "4 Apr 2025",
-            normalizedDate: "04/04/2025",
-            category: "politics",
-            publicationId: "pub_abc123"
+            rawDate: "1 hour ago",
+            normalizedDate: "21/05/2024",
+            category: "science",
+            publicationId: "0VrZ2G7e"
         }
     }); 
 
@@ -275,17 +298,23 @@ export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdA
 
 // Body for POST /publications/query (was GetPublicationsQuerySchema)
 export const PublicationsQueryBodySchema = z.object({
-    category: z.enum(publicationCategories).optional().openapi({ description: 'Filter by publication category', example: 'broadsheet'}),
+    category: z.enum(publicationCategories).optional().openapi({ description: 'Filter by publication category', example: 'broadcaster'}),
     regionNames: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.string()).optional()
-    ).openapi({ description: 'Filter by associated region names (comma-separated string or array)', example: ['UK','US'] }),
+    ).openapi({ description: 'Filter by associated region names (comma-separated string or array)', example: ['UK'] }),
 }).openapi({ ref: 'PublicationsQueryBody' });
 
 // Body for POST /headlines/query (was GetHeadlinesQueryObjectSchema)
 export const HeadlinesQueryBodySchema = z.object({
-    startDate: z.string().datetime().optional().openapi({ description: 'Filter by start date (ISO 8601 format)', example: '2024-01-01T00:00:00Z'}),
-    endDate: z.string().datetime().optional().openapi({ description: 'Filter by end date (ISO 8601 format)', example: new Date().toISOString() }),
+    startDate: z.string()
+      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { message: "Start date must be in DD/MM/YYYY format" })
+      .optional()
+      .openapi({ description: 'Filter by start date (DD/MM/YYYY format)', example: '18/05/2024'}),
+    endDate: z.string()
+      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { message: "End date must be in DD/MM/YYYY format" })
+      .optional()
+      .openapi({ description: 'Filter by end date (DD/MM/YYYY format)', example: '21/05/2024'}),
     publicationCategory: z.enum(publicationCategories).optional().openapi({ description: 'Filter by the category of the publication', example: 'broadcaster'}),
     publicationRegionNames: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
@@ -294,24 +323,24 @@ export const HeadlinesQueryBodySchema = z.object({
     categories: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.enum(headlineCategories)).optional()
-    ).openapi({ description: 'Filter by headline category (comma-separated string or array)', example: ['politics']}),
+    ).openapi({ description: 'Filter by headline category (comma-separated string or array)', example: ['politics', 'technology']}),
     page: z.coerce.number().int().positive().optional().default(1).openapi({ description: 'Page number for pagination', example: 1}),
     pageSize: z.coerce.number().int().positive().optional().default(100).openapi({ description: 'Number of results per page', example: 10}),
 }).openapi({ ref: 'HeadlinesQueryBody' });
 
 // Body for DELETE /publications (was UrlParamSchema)
 export const DeletePublicationBodySchema = z.object({ 
-    id: z.string().openapi({ description: 'ID of the publication to delete', example: 'pub_abc123' })
+    id: z.string().openapi({ description: 'ID of the publication to delete', example: 'aV_4vVQq' })
 }).openapi({ ref: 'DeletePublicationBody' });
 
 // Body for DELETE /regions (was NameParamSchema)
 export const DeleteRegionBodySchema = z.object({ 
-    id: z.string().openapi({ description: 'ID of the region to delete', example: 'reg_uk123' })
+    id: z.string().openapi({ description: 'ID of the region to delete', example: '9AS6YO5R' })
 }).openapi({ ref: 'DeleteRegionBody' });
 
 // Body for DELETE /headlines (was IdParamSchema)
 export const DeleteHeadlineBodySchema = z.object({ 
-    id: z.string().openapi({ description: 'ID of the headline to delete', example: 'abc123xyz' })
+    id: z.string().openapi({ description: 'ID of the headline to delete', example: 'eXIJBGp5' })
 }).openapi({ ref: 'DeleteHeadlineBody' });
 
 // --- Response Schemas (Unchanged) ---
@@ -324,3 +353,54 @@ export const HeadlinesQueryResponseSchema = z.object({
     pageSize: z.number().int().openapi({ description: 'The number of results per page', example: 100 }),
     totalPages: z.number().int().openapi({ description: 'The total number of pages available', example: 2 }),
 }).openapi({ ref: 'HeadlinesQueryResponse' });
+
+// --- Response Schemas using the standard format ---
+
+// Example: Standard response for getting a single publication
+export const PublicationResponseSchema = createStandardResponseSchema(
+  PublicationSchema,
+  'PublicationResponse'
+);
+
+// Example: Standard response for getting a list of publications
+export const PublicationsListResponseSchema = createStandardResponseSchema(
+  z.array(PublicationSchema),
+  'PublicationsListResponse'
+);
+
+// Standard response for getting regions
+export const RegionsListResponseSchema = createStandardResponseSchema(
+  z.array(RegionSchema),
+  'RegionsListResponse'
+);
+
+// Standard response for getting headlines (paginated)
+export const HeadlinesQueryStdResponseSchema = createStandardResponseSchema(
+  HeadlinesQueryResponseSchema, // Original data structure is nested here
+  'HeadlinesQueryResponse'
+);
+
+// Standard response for fetching headlines
+export const HeadlinesFetchStdResponseSchema = createStandardResponseSchema(
+  HeadlinesFetchResponseSchema, // Original data structure is nested here
+  'HeadlinesFetchResponse'
+);
+
+// Standard response for single item creates/updates/deletes where the item is returned
+export const SinglePublicationResponseSchema = createStandardResponseSchema(PublicationSchema, 'SinglePublicationResponse');
+export const SingleRegionResponseSchema = createStandardResponseSchema(RegionSchema, 'SingleRegionResponse');
+export const SingleHeadlineResponseSchema = createStandardResponseSchema(HeadlineSchema, 'SingleHeadlineResponse');
+
+// Generic success response with no specific data (e.g., for delete confirmation if not returning the item)
+// If we *always* return the deleted item, we might not need this.
+// export const SuccessResponseSchema = createStandardResponseSchema(z.null(), 'SuccessResponse');
+
+// Keep the old ErrorResponseSchema for reference or direct use if needed, 
+// but StandardErrorSchema is preferred within the standard response envelope.
+export const ErrorResponseSchema = z.object({
+  error: z.string().openapi({ description: 'Error message' }),
+  code: z.string().optional().openapi({ description: 'Error code for programmatic handling' }),
+  details: z.record(z.unknown()).optional().openapi({ 
+    description: 'Additional error details that may help in debugging or understanding the error' 
+  }),
+}).openapi({ ref: 'ErrorResponse' }); // Keep original ref for now

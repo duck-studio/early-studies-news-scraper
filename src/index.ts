@@ -1,12 +1,14 @@
 import { apiReference } from '@scalar/hono-api-reference';
-import { isWithinInterval } from 'date-fns';
+import { isWithinInterval, parse as parseDate } from 'date-fns';
 import { type Context, Hono, type Next } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
 import { resolver, validator as zValidator } from 'hono-openapi/zod';
+import { HTTPException } from 'hono/http-exception';
+import { type StatusCode } from 'hono/utils/http-status';
 import type { Logger } from 'pino';
-import { z } from 'zod';
+import { ZodError, z } from 'zod';
 import {
-  type DatabaseError, // Import the DatabaseError type
+  type DatabaseError,
   deleteHeadline,
   deletePublication,
   deleteRegion,
@@ -19,27 +21,30 @@ import {
   updateHeadlineById,
   updatePublication,
   updateRegion,
-} from './db/queries'; // Import DB query functions
+} from './db/queries';
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
 import {
-  DeleteHeadlineBodySchema, 
-  DeletePublicationBodySchema, 
-  DeleteRegionBodySchema, 
-  ErrorResponseSchema,
-  HeadlineSchema,
+  DeleteHeadlineBodySchema,
+  DeletePublicationBodySchema,
+  DeleteRegionBodySchema,
   HeadlinesFetchRequestSchema,
-  HeadlinesFetchResponseSchema,
-  HeadlinesQueryBodySchema, 
-  HeadlinesQueryResponseSchema,
+  HeadlinesFetchStdResponseSchema,
+  HeadlinesQueryBodySchema,
+  HeadlinesQueryStdResponseSchema,
   InsertHeadlineSchema,
   InsertPublicationSchema,
   InsertRegionSchema,
-  PublicationSchema,
-  PublicationsQueryBodySchema, 
-  RegionBaseSchema,
+  PublicationsListResponseSchema,
+  PublicationsQueryBodySchema,
   RegionSchema,
+  RegionsListResponseSchema,
+  SingleHeadlineResponseSchema,
+  SinglePublicationResponseSchema,
+  SingleRegionResponseSchema,
+  StandardErrorSchema,
   type TransformedNewsItem,
+  createStandardResponseSchema,
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
@@ -71,22 +76,16 @@ app.use('*', async (c, next) => {
 });
 
 app.get('/', async (c) => {
-  try {
-    const logger = c.get('logger');
-    logger.info('Root route accessed', {
-      headers: Object.fromEntries(c.req.raw.headers.entries()),
-    });
-    return c.json({
-      name: 'Early Studies Headlines Fetcher API',
-      version: '1.0.0',
-      documentation: '/docs',
-      openapi: '/openapi',
-    });
-  } catch (error) {
-    const logger = c.get('logger');
-    logger.error('Error in root route:', error);
-    throw error;
-  }
+  const logger = c.get('logger');
+  logger.info('Root route accessed', {
+    headers: Object.fromEntries(c.req.raw.headers.entries()),
+  });
+  return c.json({
+    name: 'Early Studies Headlines Fetcher API',
+    version: '1.0.0',
+    documentation: '/docs',
+    openapi: '/openapi',
+  });
 });
 
 app.get('/favicon.ico', () => {
@@ -100,7 +99,7 @@ app.get(
       info: {
         title: 'Early Studies Headlines Fetcher API',
         version: '1.0.0',
-        description: 'API for fetching news headlines for Early Studies',
+        description: 'API for fetching news headlines for Early Studies. Uses a standard response envelope { data, success, error }.',
       },
       servers: [
         { url: 'http://localhost:8787', description: 'Local Development' },
@@ -128,7 +127,7 @@ app.get(
   })
 );
 
-// --- Authorization Middleware ---
+// --- Authorization Middleware --- (Returns standard error format)
 const authMiddleware = async (c: Context<{ Variables: Variables; Bindings: Env }>, next: Next) => {
   const logger = c.get('logger');
   const { missing, valid } = validateToken(
@@ -136,48 +135,83 @@ const authMiddleware = async (c: Context<{ Variables: Variables; Bindings: Env }
     `Bearer ${c.env.BEARER_TOKEN}`,
     logger
   );
-  if (missing) {
-    return c.json({ error: 'Missing bearer token' }, 401);
-  }
-  if (!valid) {
-    return c.json({ error: 'Invalid bearer token' }, 401);
+  if (missing || !valid) {
+    const status = missing ? 401 : 403;
+    const code = missing ? 'AUTH_MISSING_TOKEN' : 'AUTH_INVALID_TOKEN';
+    const message = missing ? 'Authorization token is missing' : 'Authorization token is invalid';
+    logger.warn('Authentication failed', { message, status });
+    // Set status first (cast to StatusCode), then return JSON
+    c.status(status as StatusCode);
+    return c.json({
+       data: null,
+       success: false,
+       error: { message: message, code: code }
+    });
   }
   await next();
 };
 
-// Helper function to handle database errors in a consistent way
-function handleDatabaseError(c: Context<{ Variables: Variables; Bindings: Env }>, error: unknown, defaultMessage = 'Database operation failed') {
+// Updated helper function to return the standard error format
+function handleDatabaseError(
+  c: Context<{ Variables: Variables; Bindings: Env }>,
+  error: unknown,
+  defaultMessage = 'Database operation failed'
+): Response { // Ensure it returns a Response
   const logger = c.get('logger');
-  
-  // Check if it's our custom database error
+  let statusCode = 500;
+  let errorPayload: z.infer<typeof StandardErrorSchema> = { message: defaultMessage };
+
   if (error instanceof Error && error.name === 'DatabaseError') {
     const dbError = error as DatabaseError;
-    
-    logger.error('Database error', {
-      message: dbError.message,
-      details: dbError.details,
-    });
+    logger.error('Database error', { message: dbError.message, details: dbError.details });
 
-    // Handle specific known error conditions
+    errorPayload = {
+      message: dbError.message,
+      code: 'DB_OPERATION_FAILED',
+      details: dbError.details ?? undefined,
+    };
+
     if (dbError.message.includes('already exists')) {
-      return c.json({ error: dbError.message }, 409); // Conflict
-    } 
-    
-    if (dbError.message.includes('not found')) {
-      return c.json({ error: dbError.message }, 404); // Not found
+      statusCode = 409;
+      errorPayload.code = 'DB_CONFLICT';
+    } else if (dbError.message.includes('not found')) {
+      statusCode = 404;
+      errorPayload.code = 'DB_NOT_FOUND';
     }
 
-    // General database error
-    return c.json({ error: dbError.message }, 500);
+  } else if (error instanceof Error) {
+     logger.error('Unexpected application error', { errorName: error.name, errorMessage: error.message, errorStack: error.stack });
+     errorPayload = { message: error.message || defaultMessage, code: 'UNEXPECTED_ERROR' };
+  } else {
+    logger.error('Unexpected non-error thrown', { error });
+    errorPayload = { message: defaultMessage, code: 'UNKNOWN_ERROR' };
   }
 
-  // Handle unexpected errors
-  logger.error('Unexpected error', { error });
-  if (error instanceof Error) {
-    return c.json({ error: error.message || defaultMessage }, 500);
+  // Set status first (cast to StatusCode), then return JSON
+  c.status(statusCode as StatusCode);
+  return c.json({
+    data: null,
+    success: false,
+    error: errorPayload,
+  });
+}
+
+// Helper function to parse DD/MM/YYYY string to Date object
+function parseDdMmYyyy(dateString: string | undefined): Date | undefined {
+  if (!dateString) return undefined;
+  try {
+    // Use date-fns parse for reliable parsing
+    const parsed = parseDate(dateString, 'dd/MM/yyyy', new Date());
+    // Optional: Add validation if parse doesn't throw for invalid dates in the format
+    if (Number.isNaN(parsed.getTime())) {
+      return undefined;
+    }
+    return parsed;
+  } catch (e) {
+    // Log parsing error if needed
+    console.error(`Failed to parse date string: ${dateString}`, e);
+    return undefined;
   }
-  
-  return c.json({ error: defaultMessage }, 500);
 }
 
 // --- Database CRUD Endpoints ---
@@ -197,15 +231,15 @@ app.post(
     },
     responses: {
       200: {
-        description: 'List of publications',
+        description: 'Successful query',
         content: {
           'application/json': {
-            schema: z.array(PublicationSchema),
+            schema: PublicationsListResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500') } } },
     },
   }),
   zValidator('json', PublicationsQueryBodySchema),
@@ -213,7 +247,11 @@ app.post(
     const filters = c.req.valid('json');
     try {
       const publications = await getPublications(c.env.DB, filters);
-      return c.json(publications);
+      return c.json({
+        data: publications,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to fetch publications');
     }
@@ -244,14 +282,14 @@ app.post(
         description: 'Publication created successfully',
         content: {
           'application/json': {
-            schema: PublicationSchema,
+            schema: SinglePublicationResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      409: { description: 'Conflict - Publication already exists', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_PubCreate') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_PubCreate') } } },
+      409: { description: 'Conflict - Publication already exists', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse409_PubCreate') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_PubCreate') } } },
     },
   }),
   zValidator('json', InsertPublicationSchema),
@@ -259,7 +297,11 @@ app.post(
     const publicationData = c.req.valid('json');
     try {
       const [result] = await insertPublication(c.env.DB, publicationData);
-      return c.json(result, 201);
+      return c.json({
+        data: result,
+        success: true,
+        error: null
+      }, 201);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to insert publication');
     }
@@ -295,12 +337,12 @@ app.put(
     responses: {
       200: {
         description: 'Publication updated successfully',
-        content: { 'application/json': { schema: PublicationSchema } }
+        content: { 'application/json': { schema: SinglePublicationResponseSchema } }
       },
-      400: { description: 'Bad Request (e.g., URL conflict)', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      404: { description: 'Publication not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request (e.g., URL conflict)', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_PubUpdate') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_PubUpdate') } } },
+      404: { description: 'Publication not found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_PubUpdate') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_PubUpdate') } } },
     },
   }),
   zValidator('json', InsertPublicationSchema.partial()),
@@ -309,12 +351,20 @@ app.put(
     const updateData = c.req.valid('json');
 
      if (Object.keys(updateData).length === 0) {
-        return c.json({ error: 'Request body cannot be empty for update' }, 400);
+        return c.json({
+          data: null,
+          success: false,
+          error: { message: 'Request body cannot be empty for update', code: 'VALIDATION_ERROR' }
+        }, 400);
     }
 
     try {
       const [result] = await updatePublication(c.env.DB, publicationId, updateData);
-      return c.json(result, 200);
+      return c.json({
+        data: result,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to update publication');
     }
@@ -340,14 +390,14 @@ app.delete(
         description: 'Publication deleted successfully',
         content: {
           'application/json': {
-            schema: PublicationSchema,
+            schema: SinglePublicationResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      404: { description: 'Publication not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_PubDelete') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_PubDelete') } } },
+      404: { description: 'Publication not found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_PubDelete') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_PubDelete') } } },
     },
   }),
   zValidator('json', DeletePublicationBodySchema),
@@ -358,7 +408,11 @@ app.delete(
       if (!deleted) {
         return c.json({ error: 'Publication not found' }, 404);
       }
-      return c.json(deleted);
+      return c.json({
+        data: deleted,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to delete publication');
     }
@@ -373,20 +427,24 @@ app.get(
     tags: ['Database - Regions'],
     responses: {
       200: {
-        description: 'List of regions',
+        description: 'Successful retrieval',
         content: {
           'application/json': {
-            schema: z.array(RegionBaseSchema),
+            schema: RegionsListResponseSchema,
           },
         },
       },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_RegionsGet') } } },
     },
   }),
   async (c) => {
     try {
       const regions = await getRegions(c.env.DB);
-      return c.json(regions);
+      return c.json({
+        data: regions,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to fetch regions');
     }
@@ -415,14 +473,14 @@ app.post(
         description: 'Region created successfully',
         content: {
           'application/json': {
-            schema: RegionSchema,
+            schema: SingleRegionResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      409: { description: 'Conflict - Region already exists', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_RegionCreate') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_RegionCreate') } } },
+      409: { description: 'Conflict - Region already exists', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse409_RegionCreate') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_RegionCreate') } } },
     },
   }),
   zValidator('json', InsertRegionSchema),
@@ -430,7 +488,11 @@ app.post(
     const regionData = c.req.valid('json');
     try {
       const [result] = await insertRegion(c.env.DB, regionData);
-      return c.json(RegionSchema.parse(result), 201);
+      return c.json({
+        data: RegionSchema.parse(result),
+        success: true,
+        error: null
+      }, 201);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to insert region');
     }
@@ -465,12 +527,12 @@ app.put(
     responses: {
       200: {
         description: 'Region updated successfully',
-        content: { 'application/json': { schema: RegionSchema } }
+        content: { 'application/json': { schema: SingleRegionResponseSchema } }
       },
-      400: { description: 'Bad Request (e.g., name conflict)', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      404: { description: 'Region not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request (e.g., name conflict)', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_RegionUpdate') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_RegionUpdate') } } },
+      404: { description: 'Region not found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_RegionUpdate') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_RegionUpdate') } } },
     },
   }),
   zValidator('json', InsertRegionSchema.partial()),
@@ -480,7 +542,11 @@ app.put(
 
     try {
       const [result] = await updateRegion(c.env.DB, regionId, updateData);
-      return c.json(RegionSchema.parse(result), 200);
+      return c.json({
+        data: RegionSchema.parse(result),
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to update region');
     }
@@ -506,14 +572,14 @@ app.delete(
         description: 'Region deleted successfully',
         content: {
           'application/json': {
-            schema: RegionSchema,
+            schema: SingleRegionResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      404: { description: 'Region not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_RegionDelete') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_RegionDelete') } } },
+      404: { description: 'Region not found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_RegionDelete') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_RegionDelete') } } },
     },
   }),
   zValidator('json', DeleteRegionBodySchema),
@@ -524,7 +590,11 @@ app.delete(
       if (!deleted) {
         return c.json({ error: 'Region not found' }, 404);
       }
-      return c.json(RegionSchema.parse(deleted));
+      return c.json({
+        data: RegionSchema.parse(deleted),
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to delete region');
     }
@@ -546,24 +616,46 @@ app.post(
     },
     responses: {
       200: {
-        description: 'Paginated list of headlines',
+        description: 'Successful query',
         content: {
           'application/json': {
-            schema: HeadlinesQueryResponseSchema,
+            schema: HeadlinesQueryStdResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_HdlQuery') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_HdlQuery') } } },
     },
   }),
   zValidator('json', HeadlinesQueryBodySchema),
   async (c) => {
     const body = c.req.valid('json');
+    const logger = c.get('logger');
+
+    // Parse the DD/MM/YYYY date strings into Date objects
+    const startDate = parseDdMmYyyy(body.startDate);
+    const endDate = parseDdMmYyyy(body.endDate);
+
+    if (body.startDate && !startDate) {
+      logger.warn('Invalid start date format provided:', { startDate: body.startDate });
+      return c.json({
+        data: null,
+        success: false,
+        error: { message: 'Invalid start date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+      }, 400);
+    }
+    if (body.endDate && !endDate) {
+      logger.warn('Invalid end date format provided:', { endDate: body.endDate });
+      return c.json({
+        data: null,
+        success: false,
+        error: { message: 'Invalid end date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+      }, 400);
+    }
     
     const headlineFilters = {
-      startDate: body.startDate ? new Date(body.startDate) : undefined,
-      endDate: body.endDate ? new Date(body.endDate) : undefined,
+      startDate: startDate, // Use parsed Date object
+      endDate: endDate,     // Use parsed Date object
       categories: body.categories,
       page: body.page,
       pageSize: body.pageSize,
@@ -575,7 +667,11 @@ app.post(
 
     try {
       const headlines = await getHeadlines(c.env.DB, headlineFilters);
-      return c.json(headlines);
+      return c.json({
+        data: headlines,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to fetch headlines');
     }
@@ -611,14 +707,14 @@ app.post(
         description: 'Headline created successfully',
         content: {
           'application/json': {
-            schema: HeadlineSchema,
+            schema: SingleHeadlineResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request / Publication Not Found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      409: { description: 'Conflict - Headline URL already exists', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request / Publication Not Found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_HdlCreate') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_HdlCreate') } } },
+      409: { description: 'Conflict - Headline URL already exists', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse409_HdlCreate') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_HdlCreate') } } },
     },
   }),
   zValidator('json', InsertHeadlineSchema),
@@ -626,7 +722,11 @@ app.post(
     const headlineData = c.req.valid('json');
     try {
       const [result] = await insertHeadline(c.env.DB, headlineData);
-      return c.json(result, 201);
+      return c.json({
+        data: result,
+        success: true,
+        error: null
+      }, 201);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to insert headline');
     }
@@ -663,12 +763,12 @@ app.put(
     responses: {
       200: {
         description: 'Headline updated successfully',
-        content: { 'application/json': { schema: HeadlineSchema } }
+        content: { 'application/json': { schema: SingleHeadlineResponseSchema } }
       },
-      400: { description: 'Bad Request (e.g., invalid data, publication not found, URL conflict)', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      404: { description: 'Headline not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request (e.g., invalid data, publication not found, URL conflict)', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_HdlUpdate') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_HdlUpdate') } } },
+      404: { description: 'Headline not found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_HdlUpdate') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_HdlUpdate') } } },
     },
   }),
   zValidator('json', InsertHeadlineSchema.partial().omit({ url: true })),
@@ -677,12 +777,20 @@ app.put(
     const updateData = c.req.valid('json');
 
      if (Object.keys(updateData).length === 0) {
-        return c.json({ error: 'Request body cannot be empty for update' }, 400);
+        return c.json({
+          data: null,
+          success: false,
+          error: { message: 'Request body cannot be empty for update', code: 'VALIDATION_ERROR' }
+        }, 400);
     }
 
     try {
       const [result] = await updateHeadlineById(c.env.DB, headlineId, updateData);
-      return c.json(result, 200);
+      return c.json({
+        data: result,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to update headline');
     }
@@ -708,14 +816,14 @@ app.delete(
         description: 'Headline deleted successfully',
         content: {
           'application/json': {
-            schema: HeadlineSchema,
+            schema: SingleHeadlineResponseSchema,
           },
         },
       },
-      400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      404: { description: 'Headline not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_HdlDelete') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_HdlDelete') } } },
+      404: { description: 'Headline not found', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_HdlDelete') } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_HdlDelete') } } },
     },
   }),
   zValidator('json', DeleteHeadlineBodySchema),
@@ -726,7 +834,11 @@ app.delete(
       if (!deleted) {
         return c.json({ error: 'Headline not found' }, 404);
       }
-      return c.json(deleted);
+      return c.json({
+        data: deleted,
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
       return handleDatabaseError(c, error, 'Failed to delete headline');
     }
@@ -737,8 +849,8 @@ app.post(
   '/headlines/fetch',
   authMiddleware,
   describeRoute({
-    description: 'Fetch news headlines from one or more publications',
-    tags: ['Headlines'],
+    description: 'Fetch news headlines from one or more publications via Serper API',
+    tags: ['Headlines Fetcher'],
     security: [{ bearerAuth: [] }],
     requestBody: {
       content: {
@@ -755,26 +867,32 @@ app.post(
     },
     responses: {
       200: {
-        description: 'Successful search results',
+        description: 'Successful fetch operation',
         content: {
           'application/json': {
-            schema: resolver(HeadlinesFetchResponseSchema),
+            schema: HeadlinesFetchStdResponseSchema,
           },
         },
       },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
-      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      400: { description: 'Bad Request', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_HdlFetch') } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_HdlFetch') } } },
+      403: { description: 'Forbidden', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse403_HdlFetch') } } },
+      500: { description: 'Internal Server Error / Fetch Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_HdlFetch') } } },
     },
   }),
   zValidator('json', HeadlinesFetchRequestSchema),
   async (c) => {
     const {dateRangeOption, customTbs, region, publicationUrls, maxQueriesPerPublication, flattenResults} = c.req.valid('json');
-    const logger = c.get('logger'); // Keep this one since we use it for multiple logs
+    const logger = c.get('logger');
 
     if (!c.env.SERPER_API_KEY) {
       const error = new Error('SERPER_API_KEY environment variable is not set');
       logger.error('Environment configuration error', { error });
-      throw error;
+      return c.json({
+        data: null,
+        success: false,
+        error: { message: 'Server configuration error: API key missing.', code: 'CONFIG_ERROR' }
+      }, 500);
     }
 
     const dateRange = getDateRange(dateRangeOption);
@@ -787,7 +905,7 @@ app.post(
           getGeoParams(region),
           c.env.SERPER_API_KEY,
           maxQueriesPerPublication,
-          c.get('logger')
+          logger
         );
 
       const publicationPromises = publicationUrls.map(url => 
@@ -842,7 +960,7 @@ app.post(
             const parsedDate = parseSerperDate(item.rawDate);
             const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
             if (!keep && parsedDate) {
-              c.get('logger').debug({ 
+              logger.debug({ 
                 headline: item.headline, 
                 rawDate: item.rawDate, 
                 parsedDate: parsedDate.toISOString(),
@@ -850,7 +968,7 @@ app.post(
                 rangeEnd: dateRange.end.toISOString(), 
               }, 'Filtering result: Outside date range');
             } else if (!parsedDate) {
-              c.get('logger').debug({ 
+              logger.debug({ 
                 headline: item.headline, 
                 rawDate: item.rawDate 
               }, 'Filtering result: Could not parse date');
@@ -865,7 +983,7 @@ app.post(
 
       const filteredOutCount = totalItemsBeforeFiltering - totalItemsAfterFiltering;
       if (filteredOutCount > 0) {
-        c.get('logger').info(
+        logger.info(
           { filteredOutCount, totalItemsBeforeFiltering, totalItemsAfterFiltering },
           `Filtered out ${filteredOutCount} results based on publication date.`
         );
@@ -877,7 +995,7 @@ app.post(
       const successCount = results.filter((r) => r.status === 'fulfilled').length;
       const failureCount = results.filter((r) => r.status === 'rejected').length;
 
-      c.get('logger').info('Search completed successfully', {
+      logger.info('Search completed successfully', {
         totalResults,
         totalCreditsConsumed,
         totalQueriesMade,
@@ -902,34 +1020,65 @@ app.post(
       const finalResults = flattenResults ? results.flatMap((r) => r.results) : results;
 
       return c.json({
-        results: finalResults,
-        summary: {
-          totalResults,
-          totalCreditsConsumed,
-          totalQueriesMade,
-          successCount,
-          failureCount,
+        data: {
+          results: finalResults,
+          summary: {
+            totalResults,
+            totalCreditsConsumed,
+            totalQueriesMade,
+            successCount,
+            failureCount,
+          },
         },
-      });
+        success: true,
+        error: null
+      }, 200);
     } catch (error) {
-      c.get('logger').error('Search failed', { error });
-      return c.json({ error: 'Failed to fetch news articles' }, 500);
+      logger.error('Search failed', { error });
+      return c.json({
+        data: null,
+        success: false,
+        error: { message: 'Failed to fetch news articles', code: 'FETCH_FAILED', details: error instanceof Error ? error.message : String(error) }
+      }, 500);
     }
   }
 );
 
 app.onError((err, c) => {
   const logger = c.get('logger');
-  logger.error('Unhandled error', {
-    error: err,
-    errorName: err.name,
-    errorMessage: err.message,
-    errorStack: err.stack,
-    requestPath: c.req.path,
-    requestMethod: c.req.method,
-    requestHeaders: Object.fromEntries(c.req.raw.headers.entries()),
+  let statusCode = 500;
+  let errorPayload: z.infer<typeof StandardErrorSchema> = {
+    message: 'Internal Server Error',
+    code: 'INTERNAL_SERVER_ERROR',
+  };
+
+  if (err instanceof ZodError) {
+    statusCode = 400;
+    errorPayload = {
+      message: 'Validation failed',
+      code: 'VALIDATION_ERROR',
+      details: err.flatten(),
+    };
+    logger.warn('Validation error', { path: c.req.path, method: c.req.method, errors: err.flatten() });
+  } else if (err instanceof HTTPException) {
+    statusCode = err.status;
+    errorPayload = { message: err.message, code: `HTTP_${statusCode}` };
+     logger.error('HTTP exception', { status: err.status, message: err.message, stack: err.stack });
+  } else if (err instanceof Error) {
+     errorPayload = { message: err.message, code: 'UNHANDLED_EXCEPTION', details: err.stack };
+     logger.error('Unhandled application error', { errorName: err.name, errorMessage: err.message, errorStack: err.stack });
+  } else {
+    errorPayload = { message: 'An unknown error occurred', code: 'UNKNOWN_ERROR', details: String(err) };
+    logger.error('Unknown error thrown', { error: err });
+  }
+
+  // Set status first (cast to StatusCode), then return JSON
+  c.status(statusCode as StatusCode);
+  return c.json({
+    data: null,
+    success: false,
+    error: errorPayload,
   });
-  return c.json({ error: 'Internal server error' }, 500);
 });
 
 export default app;
