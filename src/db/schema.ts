@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { nanoid } from 'nanoid';
 
@@ -109,9 +109,42 @@ export const headlines = sqliteTable(
   ]
 );
 
+// --- RELATIONS --- 
+
+export const publicationRelations = relations(publications, ({ many }) => ({
+  publicationRegions: many(publicationRegions),
+  headlines: many(headlines),
+}));
+
+export const regionRelations = relations(regions, ({ many }) => ({
+  publicationRegions: many(publicationRegions),
+}));
+
+export const publicationRegionRelations = relations(publicationRegions, ({ one }) => ({
+  publication: one(publications, {
+    fields: [publicationRegions.publicationUrl],
+    references: [publications.url],
+  }),
+  region: one(regions, {
+    fields: [publicationRegions.regionName],
+    references: [regions.name],
+  }),
+}));
+
+export const headlineRelations = relations(headlines, ({ one }) => ({
+  publication: one(publications, {
+    fields: [headlines.publicationId],
+    references: [publications.url],
+  }),
+}));
+
 export const schema = {
   publications,
   regions,
   publicationRegions,
   headlines,
+  publicationRelations,
+  regionRelations,
+  publicationRegionRelations,
+  headlineRelations,
 };
