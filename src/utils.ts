@@ -280,3 +280,21 @@ export function parseSerperDate(dateString: string, logger?: Logger): Date | nul
     return null;
   }
 }
+
+// Helper function to parse DD/MM/YYYY string to Date object
+export function parseDdMmYyyy(dateString: string | undefined): Date | undefined {
+  if (!dateString) return undefined;
+  try {
+    // Use date-fns parse for reliable parsing
+    const parsed = parse(dateString, 'dd/MM/yyyy', new Date()); // Use parse from date-fns
+    // Optional: Add validation if parse doesn't throw for invalid dates in the format
+    if (Number.isNaN(parsed.getTime())) {
+      return undefined;
+    }
+    return parsed;
+  } catch (e) {
+    // Log parsing error if needed
+    console.error(`Failed to parse date string: ${dateString}`, e);
+    return undefined;
+  }
+}

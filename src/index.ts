@@ -65,7 +65,7 @@ import {
   createStandardResponseSchema,
 } from './schema';
 import type { DateRangeEnum, FetchAllPagesResult, FetchResult } from './schema';
-import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
+import { getDateRange, getGeoParams, getTbsString, parseDdMmYyyy, parseSerperDate, validateToken } from './utils';
 import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 
 // Bindings defined in wrangler.toml
@@ -228,22 +228,65 @@ function handleDatabaseError(
   });
 }
 
-// Helper function to parse DD/MM/YYYY string to Date object
-function parseDdMmYyyy(dateString: string | undefined): Date | undefined {
-  if (!dateString) return undefined;
-  try {
-    // Use date-fns parse for reliable parsing
-    const parsed = parseDate(dateString, 'dd/MM/yyyy', new Date());
-    // Optional: Add validation if parse doesn't throw for invalid dates in the format
-    if (Number.isNaN(parsed.getTime())) {
-      return undefined;
-    }
-    return parsed;
-  } catch (e) {
-    // Log parsing error if needed
-    console.error(`Failed to parse date string: ${dateString}`, e);
-    return undefined;
+// --- Middleware for common validation ---
+const validateNonEmptyBody = async (c: Context<{ Variables: Variables; Bindings: Env }>, next: Next) => {
+  const body = await c.req.json().catch(() => ({})); // Get body, handle potential errors
+  if (Object.keys(body).length === 0) {
+    c.status(400);
+    return c.json({
+      data: null,
+      success: false,
+      error: { message: 'Request body cannot be empty for update', code: 'VALIDATION_ERROR' },
+    });
   }
+  // Store the parsed body in context if needed by the route handler, though zValidator already does this.
+  // If using zValidator *after* this middleware, ensure it doesn't re-parse.
+  // For simplicity now, we assume zValidator handles the final parsing.
+  await next();
+};
+
+// Helper to validate and parse date range from request body
+// Returns null if validation fails (response is set), otherwise returns { startDate?, endDate? }
+function validateAndParseDateRange(c: Context<{ Variables: Variables; Bindings: Env }>, body: { startDate?: string; endDate?: string }): { startDate: Date | undefined; endDate: Date | undefined } | null {
+  const logger = c.get('logger');
+  const startDate = parseDdMmYyyy(body.startDate);
+  const endDate = parseDdMmYyyy(body.endDate);
+
+  if (body.startDate && !startDate) {
+    logger.warn('Invalid start date format provided:', { startDate: body.startDate });
+    c.status(400);
+    c.json({
+      data: null,
+      success: false,
+      error: { message: 'Invalid start date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+    });
+    return null; // Validation failed
+  }
+  if (body.endDate && !endDate) {
+    logger.warn('Invalid end date format provided:', { endDate: body.endDate });
+    c.status(400);
+    c.json({
+      data: null,
+      success: false,
+      error: { message: 'Invalid end date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+    });
+    return null; // Validation failed
+  }
+
+  // Ensure start date is not after end date if both are provided
+  if (startDate && endDate && startDate > endDate) {
+    logger.warn('Start date cannot be after end date', { startDate: body.startDate, endDate: body.endDate });
+    c.status(400);
+    c.json({
+      data: null,
+      success: false,
+      error: { message: 'Start date cannot be after end date.', code: 'VALIDATION_ERROR' }
+    });
+    return null; // Validation failed
+  }
+
+  // Validation passed, return the parsed dates (which might be undefined)
+  return { startDate, endDate }; 
 }
 
 // --- Database CRUD Endpoints ---
@@ -343,6 +386,7 @@ app.post(
 app.put(
   '/publications/:id',
   authMiddleware,
+  validateNonEmptyBody,
   describeRoute({
     description: 'Update an existing publication by ID',
     tags: ['Database - Publications'],
@@ -381,14 +425,6 @@ app.put(
   async (c) => {
     const publicationId = c.req.param('id');
     const updateData = c.req.valid('json');
-
-     if (Object.keys(updateData).length === 0) {
-        return c.json({
-          data: null,
-          success: false,
-          error: { message: 'Request body cannot be empty for update', code: 'VALIDATION_ERROR' }
-        }, 400);
-    }
 
     try {
       const [result] = await updatePublication(c.env.DB, publicationId, updateData);
@@ -534,6 +570,7 @@ app.post(
 app.put(
   '/regions/:id',
   authMiddleware,
+  validateNonEmptyBody,
   describeRoute({
     description: 'Update an existing region by ID',
     tags: ['Database - Regions'],
@@ -664,30 +701,17 @@ app.post(
     const body = c.req.valid('json');
     const logger = c.get('logger');
 
-    // Parse the DD/MM/YYYY date strings into Date objects
-    const startDate = parseDdMmYyyy(body.startDate);
-    const endDate = parseDdMmYyyy(body.endDate);
+    // Parse and validate dates using the helper
+    const parsedDates = validateAndParseDateRange(c, body);
+    if (parsedDates === null) {
+      return c.res; // Response already set by the helper
+    }
+    // Destructure potentially undefined dates
+    const { startDate, endDate } = parsedDates;
 
-    if (body.startDate && !startDate) {
-      logger.warn('Invalid start date format provided:', { startDate: body.startDate });
-      return c.json({
-        data: null,
-        success: false,
-        error: { message: 'Invalid start date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
-      }, 400);
-    }
-    if (body.endDate && !endDate) {
-      logger.warn('Invalid end date format provided:', { endDate: body.endDate });
-      return c.json({
-        data: null,
-        success: false,
-        error: { message: 'Invalid end date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
-      }, 400);
-    }
-    
     const headlineFilters = {
-      startDate: startDate, // Use parsed Date object
-      endDate: endDate,     // Use parsed Date object
+      startDate: startDate, // Pass potentially undefined date
+      endDate: endDate,     // Pass potentially undefined date
       categories: body.categories,
       page: body.page,
       pageSize: body.pageSize,
@@ -768,6 +792,7 @@ app.post(
 app.put(
   '/headlines/:id',
   authMiddleware,
+  validateNonEmptyBody,
   describeRoute({
     description: 'Update an existing headline by its internal ID',
     tags: ['Database - Headlines'],
@@ -807,14 +832,6 @@ app.put(
   async (c) => {
     const headlineId = c.req.param('id');
     const updateData = c.req.valid('json');
-
-     if (Object.keys(updateData).length === 0) {
-        return c.json({
-          data: null,
-          success: false,
-          error: { message: 'Request body cannot be empty for update', code: 'VALIDATION_ERROR' }
-        }, 400);
-    }
 
     try {
       const [result] = await updateHeadlineById(c.env.DB, headlineId, updateData);
@@ -1100,36 +1117,35 @@ app.post(
     const body = c.req.valid('json');
     const logger = c.get('logger');
 
-    const startDate = parseDdMmYyyy(body.startDate);
-    const endDate = parseDdMmYyyy(body.endDate);
+    // Use the helper function for date validation and parsing
+    const parsedDates = validateAndParseDateRange(c, body);
+     if (parsedDates === null) {
+        return c.res; // Validation failed, response set by helper
+    }
+    
+    const { startDate, endDate } = parsedDates;
 
-    // Validate dates
-    if (!startDate) {
-      logger.warn('Invalid start date format provided:', { startDate: body.startDate });
+    // Validate dates are present *after* successful parsing for stats endpoint
+    if (startDate === undefined) { // Check for undefined specifically
+      logger.warn('Start date is required for statistics.');
       c.status(400);
       return c.json({
          data: null,
          success: false,
-         error: { message: 'Invalid start date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+         error: { message: 'Start date is required. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
        });
     }
-    if (!endDate) {
-      logger.warn('Invalid end date format provided:', { endDate: body.endDate });
+     if (endDate === undefined) { // Check for undefined specifically
+      logger.warn('End date is required for statistics.');
        c.status(400);
        return c.json({
          data: null,
          success: false,
-         error: { message: 'Invalid end date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+         error: { message: 'End date is required. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
        });
     }
-    if (startDate > endDate) {
-       c.status(400);
-        return c.json({
-          data: null,
-          success: false,
-          error: { message: 'Start date cannot be after end date.', code: 'VALIDATION_ERROR' }
-        });
-    }
+    
+    // Now we know startDate and endDate are valid Date objects
 
     try {
       const rawStats = await getHeadlineStats(c.env.DB, startDate, endDate);
