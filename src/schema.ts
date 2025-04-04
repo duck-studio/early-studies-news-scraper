@@ -169,7 +169,11 @@ export const HeadlineBaseSchema = z.object({
     snippet: z.string().optional().nullable().openapi({ description: 'A short snippet or summary', example: 'An example snippet describing the headline.' }),
     source: z.string().openapi({ description: 'The source or outlet reporting the headline', example: 'Example News Source' }),
     rawDate: z.string().optional().nullable().openapi({ description: 'The original date string found for the headline', example: 'Jan 1, 2024' }),
-    normalizedDate: z.string().optional().nullable().openapi({ description: 'An ISO 8601 formatted date string for consistent sorting/filtering', example: '2024-01-01T12:00:00Z'}),
+    normalizedDate: z.string()
+      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { message: "Normalized date must be in DD/MM/YYYY format, if provided" })
+      .optional()
+      .nullable()
+      .openapi({ description: 'A date string in DD/MM/YYYY format for display or simple filtering', example: '01/01/2024'}),
     category: z.enum(headlineCategories).optional().nullable().openapi({ description: 'Categorization of the headline topic', example: 'technology' }),
     publicationUrl: z.string().openapi({ description: 'URL of the publication this headline belongs to (must match a publication URL)', example: 'bbc.co.uk' }),
     createdAt: z.date().optional().openapi({ description: 'Timestamp of creation'}),
@@ -216,8 +220,8 @@ export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdA
             headline: "Example BBC Headline Update",
             snippet: "An example snippet describing the latest political update from the BBC.",
             source: "BBC News",
-            rawDate: "Just Now",
-            normalizedDate: new Date().toISOString(),
+            rawDate: "4 Apr 2025",
+            normalizedDate: "04/04/2025",
             category: "politics",
             publicationUrl: "bbc.co.uk"
         }
@@ -237,18 +241,18 @@ export const PublicationsQueryBodySchema = z.object({
 // Body for POST /headlines/query (was GetHeadlinesQueryObjectSchema)
 export const HeadlinesQueryBodySchema = z.object({
     startDate: z.string().datetime().optional().openapi({ description: 'Filter by start date (ISO 8601 format)', example: '2024-01-01T00:00:00Z'}),
-    endDate: z.string().datetime().optional().openapi({ description: 'Filter by end date (ISO 8601 format)', example: new Date().toISOString() }), // Example up to now
-    publicationCategory: z.enum(publicationCategories).optional().openapi({ description: 'Filter by the category of the publication', example: 'broadcaster'}), // Match bbc.co.uk
+    endDate: z.string().datetime().optional().openapi({ description: 'Filter by end date (ISO 8601 format)', example: new Date().toISOString() }),
+    publicationCategory: z.enum(publicationCategories).optional().openapi({ description: 'Filter by the category of the publication', example: 'broadcaster'}),
     publicationRegions: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.string()).optional()
-    ).openapi({ description: 'Filter by the regions associated with the publication (comma-separated string or array)', example: ['UK']}), // Match bbc.co.uk
+    ).openapi({ description: 'Filter by the regions associated with the publication (comma-separated string or array)', example: ['UK']}),
     categories: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.enum(headlineCategories)).optional()
-    ).openapi({ description: 'Filter by headline category (comma-separated string or array)', example: ['politics']}), // Match example headline
+    ).openapi({ description: 'Filter by headline category (comma-separated string or array)', example: ['politics']}),
     page: z.coerce.number().int().positive().optional().default(1).openapi({ description: 'Page number for pagination', example: 1}),
-    pageSize: z.coerce.number().int().positive().optional().default(100).openapi({ description: 'Number of results per page', example: 10}), // Smaller page size example
+    pageSize: z.coerce.number().int().positive().optional().default(100).openapi({ description: 'Number of results per page', example: 10}),
 }).openapi({ ref: 'HeadlinesQueryBody' });
 
 // Body for DELETE /publications (was UrlParamSchema)

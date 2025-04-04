@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS headlines (
   raw_date TEXT,
   normalized_date TEXT,
   category TEXT CHECK( category IN ('breakingNews', 'politics', 'world', 'business', 'technology', 'science', 'health', 'sports', 'entertainment', 'lifestyle', 'environment', 'crime', 'education', 'artsCulture', 'opinion', 'other') ),
+  publication_url TEXT NOT NULL REFERENCES publications(url) ON DELETE CASCADE,
   created_at INTEGER DEFAULT (strftime('%s', 'now')) NOT NULL,
   updated_at INTEGER DEFAULT (strftime('%s', 'now')) NOT NULL
 );

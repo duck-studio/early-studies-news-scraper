@@ -1,4 +1,5 @@
-import { type InferInsertModel, type InferSelectModel, and, count, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { format } from 'date-fns';
+import { type InferInsertModel, type InferSelectModel, and, count, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1'; 
 import {headlineCategories, publicationCategories, schema} from './schema';
 
@@ -101,27 +102,41 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
 
   const conditions = [];
 
+  // Helper to format date to YYYY-MM-DD for comparison
+  const formatDateForCompare = (date: Date | undefined): string | undefined => {
+      return date ? format(date, 'yyyy-MM-dd') : undefined;
+  }
+
+  // Use sql operator to convert DD/MM/YYYY to YYYY-MM-DD within the query
+  const normalizedDateYYYYMMDD = sql`substr(${schema.headlines.normalizedDate}, 7, 4) || '-' || substr(${schema.headlines.normalizedDate}, 4, 2) || '-' || substr(${schema.headlines.normalizedDate}, 1, 2)`;
+
   if (filters?.startDate) {
-    // Assuming normalizedDate is stored in a format comparable as text (e.g., ISO 8601)
-    conditions.push(gte(schema.headlines.normalizedDate, filters.startDate.toISOString()));
-    console.warn('Date filtering assumes normalizedDate is in a comparable text format (e.g., ISO 8601).');
+      const startDateStr = formatDateForCompare(filters.startDate);
+      if (startDateStr) {
+        conditions.push(gte(normalizedDateYYYYMMDD, startDateStr));
+        console.warn('Date filtering compares DD/MM/YYYY text as YYYY-MM-DD strings.');
+      } else {
+        console.warn('Could not format startDate for comparison');
+      }
   }
   if (filters?.endDate) {
-    conditions.push(lte(schema.headlines.normalizedDate, filters.endDate.toISOString()));
-     console.warn('Date filtering assumes normalizedDate is in a comparable text format (e.g., ISO 8601).');
+      const endDateStr = formatDateForCompare(filters.endDate);
+       if (endDateStr) {
+        conditions.push(lte(normalizedDateYYYYMMDD, endDateStr));
+        console.warn('Date filtering compares DD/MM/YYYY text as YYYY-MM-DD strings.');
+      } else {
+        console.warn('Could not format endDate for comparison');
+      }
   }
   if (filters?.publicationFilters?.category) {
     conditions.push(eq(schema.publications.category, filters.publicationFilters.category));
   }
   if (filters?.publicationFilters?.regions && filters.publicationFilters.regions.length > 0) {
-    // Subquery to find publication URLs matching the regions
     const regionPublicationsSubQuery = drizzleDb
       .selectDistinct({ publicationUrl: schema.publicationRegions.publicationUrl })
       .from(schema.publicationRegions)
       .where(inArray(schema.publicationRegions.regionName, filters.publicationFilters.regions));
-    
-    // Add condition to filter headlines based on the subquery results
-    conditions.push(inArray(schema.headlines.publicationUrl, regionPublicationsSubQuery));
+    conditions.push(inArray(schema.headlines.publicationUrl, regionPublicationsSubQuery)); 
   }
   if (filters?.categories && filters.categories.length > 0) {
     conditions.push(inArray(schema.headlines.category, filters.categories));
@@ -129,7 +144,6 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
 
   const whereCondition = conditions.length > 0 ? and(...conditions) : undefined;
 
-  // Always join with publications as we select fields from it
   const dataQuery = drizzleDb
     .select({
       headlineId: schema.headlines.id,
@@ -148,7 +162,7 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
     .from(schema.headlines)
     .innerJoin(schema.publications, eq(schema.headlines.publicationUrl, schema.publications.url))
     .where(whereCondition)
-    .orderBy(desc(schema.headlines.normalizedDate)) // Order by date descending
+    .orderBy(desc(normalizedDateYYYYMMDD))
     .limit(pageSize)
     .offset(offset);
 
@@ -177,23 +191,55 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
 export async function upsertHeadline(db: D1Database, data: InsertHeadline) {
   const drizzleDb = drizzle(db, { schema });
 
-  if (!data.publicationUrl) {
+  if (!data.publicationUrl) { 
     throw new Error('Cannot upsert headline without a publicationUrl');
   }  
 
+  // 1. Check if publication exists (as before)
   const publicationExists = await drizzleDb
     .select({ url: schema.publications.url })
     .from(schema.publications)
-    .where(eq(schema.publications.url, data.publicationUrl));
+    .where(eq(schema.publications.url, data.publicationUrl)); 
 
   if (publicationExists.length === 0) {
-    throw new Error(`Publication with URL ${data.publicationUrl} does not exist.`);
+    throw new Error(`Publication with URL ${data.publicationUrl} does not exist.`); 
   }
 
+  // 2. Check if headline URL already exists
+  const existingHeadline = await drizzleDb
+    .select({ id: schema.headlines.id })
+    .from(schema.headlines)
+    .where(eq(schema.headlines.url, data.url))
+    .limit(1);
+
+  if (existingHeadline.length > 0) {
+    // 3a. UPDATE if exists
+    console.log(`Headline with URL ${data.url} exists. Updating.`);
+    const updatedRows = await drizzleDb
+      .update(schema.headlines)
+      .set({
+        headline: data.headline,
+        snippet: data.snippet,
+        source: data.source,
+        rawDate: data.rawDate,
+        normalizedDate: data.normalizedDate, 
+        category: data.category,
+        publicationUrl: data.publicationUrl,
+        // Let DB handle updatedAt
+      })
+      .where(eq(schema.headlines.url, data.url))
+      .returning();
+      if(updatedRows.length === 0) {
+          throw new Error(`Failed to update headline with URL ${data.url} despite existing check.`);
+      }
+      return updatedRows;
+  }
+
+  // 3b. INSERT if not exists (will execute only if the IF condition was false)
+  console.log(`Headline with URL ${data.url} does not exist. Inserting.`);
   return await drizzleDb
     .insert(schema.headlines)
     .values(data)
-    .onConflictDoUpdate({ target: schema.headlines.url, set: data })
     .returning();
 }
 
