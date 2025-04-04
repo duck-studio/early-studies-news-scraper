@@ -5,6 +5,7 @@ import { describeRoute, openAPISpecs } from 'hono-openapi';
 import { resolver, validator as zValidator } from 'hono-openapi/zod';
 import { HTTPException } from 'hono/http-exception';
 import { type StatusCode } from 'hono/utils/http-status';
+import pLimit from 'p-limit';
 import type { Logger } from 'pino';
 import { ZodError, z } from 'zod';
 import {
@@ -1197,63 +1198,173 @@ export default {
   // Existing fetch handler
   fetch: app.fetch,
 
-  // New scheduled handler
-  async scheduled(event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {
-    // Create a basic logger for scheduled tasks (doesn't have request context)
-    // We might want a more sophisticated way to get bindings/logger later
-    console.log(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
+  // Updated scheduled handler
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const logger = createLogger(env); // Create a logger instance
+    logger.info(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
 
-    // Add your scheduled task logic here
-    // For now, just logging
+    // Wrap async work
+    ctx.waitUntil((async () => {
+        logger.info("Starting scheduled headline fetch...");
 
-    console.log("Scheduled task finished.");
+        // Check for necessary environment variables
+        if (!env.DB) {
+          logger.error('Scheduled task failed: DB environment variable is not set.');
+          return;
+        }
+        if (!env.SERPER_API_KEY) {
+           logger.error('Scheduled task failed: SERPER_API_KEY environment variable is not set.');
+           return;
+        }
+         if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
+           logger.error('Scheduled task failed: PROCESS_NEWS_ITEM_WORKFLOW binding is not set.');
+           return;
+        }
 
-    // No explicit return needed unless there's an error to handle
-    // Use ctx.waitUntil() for async tasks that need to complete after the handler returns
+        try {
+             // 1. Get Publication URLs and IDs
+            const publications = await getPublications(env.DB);
+            if (!publications || publications.length === 0) {
+                logger.info('No publications found in the database. Exiting scheduled task.');
+                return;
+            }
+            // Create a map for easy ID lookup
+            const publicationUrlToIdMap = new Map<string, string>();
+            for (const pub of publications) {
+                if (pub.id && pub.url) { // Ensure ID and URL exist
+                    publicationUrlToIdMap.set(pub.url, pub.id);
+                }
+            }
+            const publicationUrls = Array.from(publicationUrlToIdMap.keys());
+            logger.info(`Found ${publicationUrls.length} publications to fetch.`);
+
+            // 2. Setup Fetching Logic
+            const fetchLimit = pLimit(5); // Limit concurrent fetches to Serper
+            const dateRangeOption = 'Past 24 Hours';
+            const region = 'UK'; // Defaulting to UK, make configurable if needed
+            const maxQueriesPerPublication = 5; // Default limit
+            const tbs = getTbsString(dateRangeOption, undefined);
+            const geoParams = getGeoParams(region);
+            const dateRange = getDateRange(dateRangeOption);
+
+            const fetchPromises = publicationUrls.map(url =>
+                fetchLimit(() => fetchAllPagesForUrl(
+                    url,
+                    tbs,
+                    geoParams,
+                    env.SERPER_API_KEY,
+                    maxQueriesPerPublication,
+                    logger
+                ))
+            );
+
+            // 3. Execute Fetches
+            logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
+            const fetchResults = await Promise.all(fetchPromises);
+            logger.info('Finished fetching headlines.');
+
+            // 4. Process Results and Trigger Workflows
+            let totalFetched = 0;
+            let totalFiltered = 0;
+            let workflowsTriggered = 0;
+            let workflowErrors = 0;
+            const workflowLimit = pLimit(10); // Limit concurrent workflow creations
+            const workflowPromises: Promise<unknown>[] = [];
+
+            for (const result of fetchResults) {
+                if (result.error) {
+                    logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
+                    continue;
+                }
+
+                totalFetched += result.results.length;
+
+                for (const item of result.results) {
+                    const publicationId = publicationUrlToIdMap.get(result.url);
+                    if (!publicationId) {
+                         logger.warn(`Could not find publication ID for URL: ${result.url}`);
+                         continue;
+                    }
+
+                    const parsedDate = parseSerperDate(item.date);
+                    if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
+                         totalFiltered++;
+                         const workflowParams: ProcessNewsItemParams = {
+                             headlineUrl: item.link,
+                             publicationId: publicationId,
+                         };
+
+                         workflowPromises.push(
+                            workflowLimit(async () => {
+                                try {
+                                    const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
+                                         params: workflowParams
+                                    });
+                                    logger.debug(`Triggered workflow ${instance.id} for headline: ${item.link}`);
+                                    workflowsTriggered++;
+                                } catch (wfError) {
+                                    logger.error(`Failed to trigger workflow for headline: ${item.link}`, { error: wfError });
+                                    workflowErrors++;
+                                }
+                            })
+                        );
+                    } 
+                }
+            }
+
+            await Promise.allSettled(workflowPromises);
+
+            logger.info('Scheduled task finished.', {
+                publicationsFetched: fetchResults.length,
+                headlinesFetchedTotal: totalFetched,
+                headlinesWithinDateRange: totalFiltered,
+                workflowsTriggered,
+                workflowErrors
+            });
+
+        } catch (error) {
+            logger.error('Error during scheduled task execution:', { error });
+        }
+    })()); // End ctx.waitUntil execution
   }
 }; // Ensure export default is an object
 
 // Define the Workflow parameters
 type ProcessNewsItemParams = {
   headlineUrl: string;
-  // Add other parameters needed for processing
+  publicationId: string;
 };
 
-// Define the Workflow class
+// Define the Workflow class (ensure params match)
 export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
-    console.log("Starting ProcessNewsItemWorkflow for:", event.payload.headlineUrl);
+    // Use event.payload.headlineUrl, event.payload.publicationId etc.
+    console.log("Starting ProcessNewsItemWorkflow for:", event.payload.headlineUrl, "PubID:", event.payload.publicationId);
 
     const existingRecord = await step.do('check database for existing record', async () => {
       console.log('Checking database for:', event.payload.headlineUrl);
-      // In a real scenario, query this.env.DB
-      // const record = await this.env.DB.prepare('SELECT * FROM headlines WHERE url = ?').bind(event.payload.headlineUrl).first();
-      // return { exists: !!record };
+      // In a real scenario, query this.env.DB using publicationId and headlineUrl
       return { exists: false }; // Placeholder
     });
 
     if (existingRecord.exists) {
       console.log('Record already exists, skipping further processing for:', event.payload.headlineUrl);
-      return; // Exit the workflow if the record exists
+      return; // Exit the workflow
     }
 
     const analysisResult = await step.do('analyze and tag headline', async () => {
       console.log('Analyzing and tagging headline:', event.payload.headlineUrl);
-      // In a real scenario, perform analysis (e.g., using Workers AI)
-      // return { tags: ['example-tag'], sentiment: 'neutral' };
+      // In a real scenario, perform analysis
       return { tags: [], sentiment: null }; // Placeholder
     });
 
     await step.do('store headline in db', async () => {
       console.log('Storing headline in DB:', event.payload.headlineUrl);
-      // In a real scenario, insert into this.env.DB using data from previous steps
-      // await this.env.DB.prepare('INSERT INTO headlines (url, tags, sentiment) VALUES (?, ?, ?)')
-      //  .bind(event.payload.headlineUrl, JSON.stringify(analysisResult.tags), analysisResult.sentiment)
-      //  .run();
+      // In a real scenario, insert into this.env.DB
       console.log(
-        'Placeholder: Headline stored for', 
-        event.payload.headlineUrl, 
-        'with analysis:', 
+        'Placeholder: Headline stored for',
+        event.payload.headlineUrl,
+        'with analysis:',
         analysisResult
       );
     });
