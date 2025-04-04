@@ -1,4 +1,3 @@
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { apiReference } from '@scalar/hono-api-reference';
 import { isWithinInterval, parse as parseDate } from 'date-fns';
 import { type Context, Hono, type Next } from 'hono';
@@ -7,6 +6,7 @@ import { resolver, validator as zValidator } from 'hono-openapi/zod';
 import { HTTPException } from 'hono/http-exception';
 import { type StatusCode } from 'hono/utils/http-status';
 import pLimit from 'p-limit';
+import { createWorkersAI } from 'workers-ai-provider';
 
 import { generateObject } from 'ai';
 import type { Logger } from 'pino';
@@ -1319,7 +1319,8 @@ async function performHeadlineSync(
             let headlinesFilteredCount = 0;
             let workflowsTriggered = 0;
             let workflowErrors = 0;
-            const workflowLimit = pLimit(10); 
+            // Reduce concurrency significantly to space out AI calls within workflows
+            const workflowLimit = pLimit(2); 
             const workflowPromises: Promise<unknown>[] = [];
 
             const processedHeadlines = fetchResults.flatMap(result => {
@@ -1641,18 +1642,15 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
        }
        
        // Initialize Google AI client
-       const google = createGoogleGenerativeAI({
-          apiKey: this.env.GOOGLE_AI_STUDIO_API_KEY
-       });
+       const cloudflare = createWorkersAI({binding: this.env.AI});
 
       const allowedCategories = headlineCategories.join(', ');
       const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the schema provided.`;
       const userPrompt = `Headline: "${headlineText}"\nSnippet: "${snippet || 'N/A'}"\n\nCategorize this headline.`;
       
       try {
-        // Use generateObject with the Google model and Zod schema
         const { object: aiResultObject } = await generateObject({
-            model: google('gemini-1.5-flash-latest'), // Using latest flash model
+            model: cloudflare('@cf/meta/llama-3.3-70b-instruct-fp8-fast'),
             schema: HeadlineCategorySchema, // Pass Zod schema directly
             system: systemPrompt,
             prompt: userPrompt,
