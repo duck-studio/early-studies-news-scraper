@@ -149,9 +149,6 @@ app.get(
   describeRoute({
     description: 'Get a list of publications, optionally filtered by category or regions',
     tags: ['Database - Publications'],
-    request: {
-        query: GetPublicationsQuerySchema,
-    },
     responses: {
       200: {
         description: 'List of publications',
@@ -185,12 +182,15 @@ app.post(
     description: 'Create or update a publication',
     tags: ['Database - Publications'],
     security: [{ bearerAuth: [] }],
-    request: {
-      body: {
-        content: {
-          'application/json': {
-            schema: InsertPublicationSchema,
-          },
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: InsertPublicationSchema,
+          example: {
+              name: "The Example Times",
+              url: "https://example.com/news",
+              category: "broadsheet"
+          }
         },
       },
     },
@@ -228,10 +228,7 @@ app.delete(
   describeRoute({
     description: 'Delete a publication by its URL',
     tags: ['Database - Publications'],
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: UrlParamSchema,
-    },
+    security: [{ bearerAuth: [] }], 
     responses: {
       200: {
         description: 'Publication deleted successfully',
@@ -301,12 +298,13 @@ app.post(
     description: 'Create or update a region',
     tags: ['Database - Regions'],
     security: [{ bearerAuth: [] }],
-    request: {
-      body: {
-        content: {
-          'application/json': {
-            schema: InsertRegionSchema,
-          },
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: InsertRegionSchema,
+          example: {
+              name: "UK"
+          }
         },
       },
     },
@@ -345,8 +343,6 @@ app.delete(
     description: 'Delete a region by its name',
     tags: ['Database - Regions'],
     security: [{ bearerAuth: [] }],
-    request: {
-      params: NameParamSchema,
     },
     responses: {
       200: {
@@ -386,9 +382,6 @@ app.get(
   describeRoute({
     description: 'Get a list of headlines, with filters and pagination',
     tags: ['Database - Headlines'],
-    request: {
-      query: GetHeadlinesQuerySchema,
-    },
     responses: {
       200: {
         description: 'Paginated list of headlines',
@@ -428,12 +421,20 @@ app.post(
     description: 'Create or update a headline',
     tags: ['Database - Headlines'],
     security: [{ bearerAuth: [] }],
-    request: {
-      body: {
-        content: {
-          'application/json': {
-            schema: InsertHeadlineSchema,
-          },
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: InsertHeadlineSchema,
+          example: {
+              url: "https://example.com/news/article123",
+              headline: "Example Headline Takes World by Storm",
+              snippet: "An example snippet describing the headline.",
+              source: "Example News Source",
+              rawDate: "Jan 1, 2024",
+              normalizedDate: "2024-01-01T12:00:00Z",
+              category: "technology",
+              publicationId: "https://example.com/news"
+          }
         },
       },
     },
@@ -476,9 +477,6 @@ app.delete(
     description: 'Delete a headline by its ID',
     tags: ['Database - Headlines'],
     security: [{ bearerAuth: [] }],
-    request: {
-      params: IdParamSchema,
-    },
     responses: {
       200: {
         description: 'Headline deleted successfully',
@@ -512,32 +510,20 @@ app.delete(
 
 app.post(
   '/headlines/fetch',
-  async (c, next) => {
-    const logger = c.get('logger');
-    const {missing, valid} = validateToken(c.req.header('Authorization'), `Bearer ${c.env.BEARER_TOKEN}`, logger);
-    if (missing) {
-      return c.json({ error: 'Missing bearer token' }, 401);
-    }
-    if (!valid) {
-      return c.json({ error: 'Invalid bearer token' }, 401);
-    }
-    await next();
-  },
+  authMiddleware,
   describeRoute({
     description: 'Fetch news headlines from one or more publications',
     tags: ['Headlines'],
     security: [{ bearerAuth: [] }],
-    request: {
-      body: {
-        content: {
-          'application/json': {
-            schema: resolver(HeadlinesFetchRequestSchema),
-            example: {
-              publicationUrls: ['https://bbc.co.uk'],
-              region: 'UK',
-              dateRangeOption: 'Past Week', 
-              maxQueriesPerPublication: 5, 
-            },
+    requestBody: {
+      content: {
+        'application/json': {
+          schema: resolver(HeadlinesFetchRequestSchema),
+          example: {
+            publicationUrls: ['https://bbc.co.uk'],
+            region: 'UK',
+            dateRangeOption: 'Past Week',
+            maxQueriesPerPublication: 5,
           },
         },
       },
@@ -551,22 +537,8 @@ app.post(
           },
         },
       },
-      401: {
-        description: 'Unauthorized - Invalid or missing bearer token',
-        content: {
-          'application/json': {
-            schema: resolver(ErrorResponseSchema),
-          },
-        },
-      },
-      500: {
-        description: 'Internal server error',
-        content: {
-          'application/json': {
-            schema: resolver(ErrorResponseSchema),
-          },
-        },
-      },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
   zValidator('json', HeadlinesFetchRequestSchema),
