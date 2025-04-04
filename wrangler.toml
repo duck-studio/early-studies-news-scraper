@@ -1,0 +1,25 @@
+name = "early-studies-api"
+main = "src/index.ts"
+compatibility_date = "2025-04-04"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["0 0 * * *"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[[d1_databases]]
+binding = "DB"
+database_name = "early-studies-d1-database"
+database_id = "770fd9ff-f7fa-40bc-9a83-b6036ddff67e"
+migrations_dir = "src/db/migrations"
+
+[[workflows]]
+name = "process-news-item-workflow"
+binding = "PROCESS_NEWS_ITEM_WORKFLOW"
+class_name = "ProcessNewsItemWorkflow"
