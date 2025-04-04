@@ -11,7 +11,7 @@
       "custom_domain": true
     },
     {
-      "pattern": "early-studies-api.early-studies-api.workers.dev",
+      "pattern": "early-studies-api.early-studies.workers.dev",
       "custom_domain": false
     }
   ],

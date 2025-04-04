@@ -1,5 +1,5 @@
 import { apiReference } from '@scalar/hono-api-reference';
-import { isWithinInterval, parse as parseDate } from 'date-fns';
+import { isWithinInterval} from 'date-fns';
 import { type Context, Hono, type Next } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
 import { resolver, validator as zValidator } from 'hono-openapi/zod';
@@ -699,7 +699,6 @@ app.post(
   zValidator('json', HeadlinesQueryBodySchema),
   async (c) => {
     const body = c.req.valid('json');
-    const logger = c.get('logger');
 
     // Parse and validate dates using the helper
     const parsedDates = validateAndParseDateRange(c, body);
