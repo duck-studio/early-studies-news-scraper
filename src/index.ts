@@ -1588,7 +1588,7 @@ type ProcessNewsItemParams = {
   // category will be assigned later by AI step
 };
 
-// Zod schema for the expected AI output (Removed .openapi() for AI usage)
+// Zod schema for the expected AI output
 const HeadlineCategorySchema = z.object({
   category: z.enum(headlineCategories).nullable()
     .describe("The determined headline category, or null if none clearly apply.")
@@ -1597,6 +1597,7 @@ const HeadlineCategorySchema = z.object({
 // Define the Workflow class (params type already updated)
 export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
+    // Ensure all needed params are destructured
     const { headlineUrl, publicationId, headlineText, snippet, source, rawDate, normalizedDate } = event.payload;
     const workflowLogger = {
         log: (message: string, data?: object) => console.log(`[WF] ${message}`, data ? JSON.stringify(data) : ''),
@@ -1625,65 +1626,50 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
     // --- Step 2: Decide Path (Update or Create) --- 
     if (existingHeadline.exists) {
       workflowLogger.log('Record already exists, skipping further processing.', { id: existingHeadline.id, url: headlineUrl });
-      // Optional: Add update logic here if needed in the future
-      // await step.do('update existing record', async () => { ... });
       return; // End workflow execution
     }
 
-    // --- Step 3: Analyze New Headline with AI --- 
+    // --- Step 3: Analyze New Headline with Google AI --- 
     workflowLogger.log('Headline does not exist, proceeding to analyze.', { headlineUrl });
     const analysisResult = await step.do('analyze and categorize headline', async () => {
-       workflowLogger.log('Starting AI analysis for headline', { headlineText });
+       workflowLogger.log('Starting Google AI analysis for headline', { headlineText });
 
-      if (!this.env.AI) {
-        workflowLogger.error('Workflow Error: AI binding missing.');
-        throw new Error('AI binding is not configured for the workflow environment.');
-      }
+       // Check for API Key first
+       if (!this.env.GOOGLE_AI_STUDIO_API_KEY) {
+         workflowLogger.error('Workflow Error: GOOGLE_AI_STUDIO_API_KEY binding missing.');
+         throw new Error('Google AI API Key is not configured for the workflow environment.');
+       }
+       
+       // Initialize Google AI client
+       const google = createGoogleGenerativeAI({
+          apiKey: this.env.GOOGLE_AI_STUDIO_API_KEY
+       });
 
       const allowedCategories = headlineCategories.join(', ');
-      const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the following schema: { "category": "<chosen_category>" | null }.`;
+      const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the schema provided.`;
       const userPrompt = `Headline: "${headlineText}"\nSnippet: "${snippet || 'N/A'}"\n\nCategorize this headline.`;
       
-      // Pass the Zod schema object directly 
-      const responseSchemaForAI = HeadlineCategorySchema;
-      // Remove the check for responseSchema as it's the Zod object itself
-
       try {
-        const google = createGoogleGenerativeAI({
-          apiKey: this.env.GOOGLE_AI_STUDIO_API_KEY
-          
-        })
-        const model = google('gemini-2.0-flash-001',{
-          safetySettings: [
-            { category: 'HARM_CATEGORY_UNSPECIFIED', threshold: 'BLOCK_LOW_AND_ABOVE' },
-          ],
+        // Use generateObject with the Google model and Zod schema
+        const { object: aiResultObject } = await generateObject({
+            model: google('gemini-1.5-flash-latest'), // Using latest flash model
+            schema: HeadlineCategorySchema, // Pass Zod schema directly
+            system: systemPrompt,
+            prompt: userPrompt,
         });
-
-        const aiResponse = await generateObject({
-model,
-schema: responseSchemaForAI,
-system: systemPrompt,
-prompt: userPrompt,
-        })
        
+        workflowLogger.log('Google AI Response Object', { response: aiResultObject });
 
-        workflowLogger.log('Raw AI Response', { response: aiResponse });
-
-        // Validate the AI response structure and category using the same Zod schema
-        const validated = HeadlineCategorySchema.safeParse(aiResponse);
-
-        if (!validated.success) {
-             workflowLogger.error('AI response validation failed', { errors: validated.error.flatten(), rawResponse: aiResponse });
-             return { category: 'other' as const }; 
-        }
+        // Handle null category explicitly (if AI returns null, map it to 'other')
+        // generateObject should have already validated against the schema
+        const category = aiResultObject.category ?? 'other'; 
         
-        const category = validated.data.category ?? 'other';
-        
-        workflowLogger.log('AI analysis successful', { category });
-        return { category };
+        workflowLogger.log('Google AI analysis successful', { category });
+        return { category }; // Return the category object expected by later steps
 
       } catch (aiError) {
-         workflowLogger.error('AI execution failed', { headlineText, aiError });
+         // Log the error and re-throw to trigger workflow step retry
+         workflowLogger.error('Google AI generateObject failed', { headlineText, aiError });
          throw aiError;
       }
     });
