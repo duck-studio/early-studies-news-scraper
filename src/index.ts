@@ -135,7 +135,7 @@ app.get(
       },
       servers: [
         { url: 'http://localhost:8787', description: 'Local Development' },
-        { url: 'https://your-worker.workers.dev', description: 'Production' },
+        { url: 'https://api.earlystudies.com', description: 'Production' },
       ],
       components: {
         securitySchemes: {
