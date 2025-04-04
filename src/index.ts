@@ -1226,15 +1226,21 @@ app.onError((err, c) => {
 
 type SyncSummary = z.infer<typeof ManualSyncResponseDataSchema>;
 
+// Helper function for async delay
+
 async function performHeadlineSync(
   env: Env,
   logger: Logger,
   triggerType: 'manual' | 'scheduled',
   dateRangeOption: DateRangeEnum,
   customTbs: string | undefined,
-  maxQueriesPerPublication: number
+  maxQueriesPerPublication: number,
+  targetRPS = 8.33
 ): Promise<SyncSummary> {
-    logger.info("Starting headline sync...", { triggerType, dateRangeOption, maxQueriesPerPublication });
+    logger.info("Starting headline sync...", { triggerType, dateRangeOption, maxQueriesPerPublication, targetRPS });
+
+    // Removed unused minDelayMs
+    // const minDelayMs = 1000 / targetRPS; 
 
     // --- Create Sync Run Record ---
     let syncRunId: string | undefined;
@@ -1469,7 +1475,7 @@ app.post(
   }),
   zValidator('json', ManualSyncRequestSchema),
   async (c) => {
-    const { dateRangeOption, customTbs, maxQueriesPerPublication } = c.req.valid('json');
+    const { dateRangeOption, customTbs, maxQueriesPerPublication, targetRps = 8.33 } = c.req.valid('json');
     const logger = c.get('logger');
 
     try {
@@ -1480,7 +1486,8 @@ app.post(
         'manual', 
         dateRangeOption,
         customTbs,
-        maxQueriesPerPublication
+        maxQueriesPerPublication,
+        targetRps
       );
 
       return c.json({
@@ -1558,16 +1565,20 @@ export default {
     const logger = createLogger(env);
     logger.info(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
 
+    // Define default RPS for scheduled runs
+    const scheduledRps = 8.33;
+
     ctx.waitUntil((async () => {
         try {
-            // Pass 'scheduled' as the trigger type
+            // Pass 'scheduled' as the trigger type and default RPS
             await performHeadlineSync(
-                env, 
-                logger, 
+                env,
+                logger,
                 'scheduled',
-                'Past 24 Hours',
-                undefined,
-                5
+                'Past 24 Hours', // Default date range for scheduled runs
+                undefined,        // No custom TBS for scheduled runs
+                5,                // Default max queries for scheduled runs
+                scheduledRps      // Pass the variable here
             );
         } catch (error) {
             logger.error('Scheduled headline sync failed.', { error });

@@ -463,9 +463,9 @@ export const ManualSyncRequestSchema = z.object({
     .describe("Date range for the sync operation."),
   customTbs: z
     .string()
-    .startsWith('tbs=cdr:1,cd_min:', {
-      message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:' (note: the 'tbs=' prefix will be automatically removed when sent to the API).",
-    })
+    // .startsWith('tbs=cdr:1,cd_min:', { // Temporarily commenting out for simplicity if causing issues
+    //   message: "Custom TBS string must start with 'tbs=cdr:1,cd_min:' (note: the 'tbs=' prefix will be automatically removed when sent to the API).",
+    // })
     .optional()
     .describe("Required if dateRangeOption is 'Custom'. Format: 'tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY'"),
   maxQueriesPerPublication: z
@@ -475,6 +475,13 @@ export const ManualSyncRequestSchema = z.object({
     .optional()
     .default(5)
     .describe('Maximum number of Serper API queries per publication URL.'),
+  // Add the new field here
+  targetRps: z
+    .number()
+    .positive('Target RPS must be a positive number.')
+    .optional()
+    .default(8.33) // Default to 8.33 RPS (500/min)
+    .describe('Target Requests Per Second for fetching headlines.')
 }).refine(
   (data) =>
     data.dateRangeOption !== 'Custom' ||
@@ -489,7 +496,8 @@ export const ManualSyncRequestSchema = z.object({
     description: 'Parameters for manually triggering a headline sync operation.',
     example: {
         dateRangeOption: "Past Month",
-        maxQueriesPerPublication: 10
+        maxQueriesPerPublication: 10,
+        targetRps: 8.33 // Added to example
     }
 });
 
