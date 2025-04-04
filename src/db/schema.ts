@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { nanoid } from 'nanoid';
 
 export const publicationCategories = [
@@ -35,8 +35,11 @@ export const headlineCategories = [
 export const publications = sqliteTable(
   'publications',
   {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => nanoid(8)),
     name: text('name').notNull(),
-    url: text('url').primaryKey(),
+    url: text('url').notNull(),
     category: text('category', { enum: publicationCategories }),
     createdAt: integer('created_at', { mode: 'timestamp' })
       .default(sql`(strftime('%s', 'now'))`)
@@ -46,6 +49,7 @@ export const publications = sqliteTable(
       .$onUpdate(() => sql`(strftime('%s', 'now'))`),
   },
   (table) => ({
+    urlIdx: uniqueIndex('publications_url_idx').on(table.url),
     categoryIdx: index('publications_category_idx').on(table.category),
   })
 );
@@ -53,24 +57,30 @@ export const publications = sqliteTable(
 export const regions = sqliteTable(
   'regions',
   {
-    name: text('name').primaryKey(),
-  }
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => nanoid(8)),
+    name: text('name').notNull(),
+  },
+  (table) => ({
+    nameIdx: uniqueIndex('regions_name_idx').on(table.name),
+  })
 );
 
 export const publicationRegions = sqliteTable(
   'publication_regions',
   {
-    publicationUrl: text('publication_url')
+    publicationId: text('publication_id')
       .notNull()
-      .references(() => publications.url, { onDelete: 'cascade' }),
-    regionName: text('region_name')
+      .references(() => publications.id, { onDelete: 'cascade' }),
+    regionId: text('region_id')
       .notNull()
-      .references(() => regions.name, { onDelete: 'cascade' }),
+      .references(() => regions.id, { onDelete: 'cascade' }),
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.publicationUrl, table.regionName] }),
-    publicationUrlIdx: index('pub_regions_pub_url_idx').on(table.publicationUrl),
-    regionNameIdx: index('pub_regions_region_name_idx').on(table.regionName),
+    pk: primaryKey({ columns: [table.publicationId, table.regionId] }),
+    publicationIdIdx: index('pub_regions_pub_id_idx').on(table.publicationId),
+    regionIdIdx: index('pub_regions_region_id_idx').on(table.regionId),
   })
 );
 
@@ -87,9 +97,9 @@ export const headlines = sqliteTable(
     rawDate: text('raw_date'),
     normalizedDate: text('normalized_date'),
     category: text('category', { enum: headlineCategories }),
-    publicationUrl: text('publication_url')
+    publicationId: text('publication_id')
       .notNull()
-      .references(() => publications.url, { onDelete: 'cascade' }),
+      .references(() => publications.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp' })
       .default(sql`(strftime('%s', 'now'))`)
       .notNull(),
@@ -98,7 +108,7 @@ export const headlines = sqliteTable(
       .$onUpdate(() => sql`(strftime('%s', 'now'))`),
   },
   (table) => [
-    index('headlines_publication_url_idx').on(table.publicationUrl),
+    index('headlines_publication_id_idx').on(table.publicationId),
     index('headlines_normalized_date_idx').on(table.normalizedDate),
     index('headlines_headline_idx').on(table.headline),
     index('headlines_headline_date_idx').on(table.headline, table.normalizedDate),
@@ -120,19 +130,19 @@ export const regionRelations = relations(regions, ({ many }) => ({
 
 export const publicationRegionRelations = relations(publicationRegions, ({ one }) => ({
   publication: one(publications, {
-    fields: [publicationRegions.publicationUrl],
-    references: [publications.url],
+    fields: [publicationRegions.publicationId],
+    references: [publications.id],
   }),
   region: one(regions, {
-    fields: [publicationRegions.regionName],
-    references: [regions.name],
+    fields: [publicationRegions.regionId],
+    references: [regions.id],
   }),
 }));
 
 export const headlineRelations = relations(headlines, ({ one }) => ({
   publication: one(publications, {
-    fields: [headlines.publicationUrl],
-    references: [publications.url],
+    fields: [headlines.publicationId],
+    references: [publications.id],
   }),
 }));
 

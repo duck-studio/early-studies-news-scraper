@@ -6,15 +6,19 @@ import { resolver, validator as zValidator } from 'hono-openapi/zod';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 import {
+  type DatabaseError, // Import the DatabaseError type
   deleteHeadline,
   deletePublication,
   deleteRegion,
   getHeadlines,
   getPublications,
   getRegions,
-  upsertHeadline,
-  upsertPublication,
-  upsertRegion,
+  insertHeadline,
+  insertPublication,
+  insertRegion,
+  updateHeadlineById,
+  updatePublication,
+  updateRegion,
 } from './db/queries'; // Import DB query functions
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
 import { createLogger, createRequestLogger } from './logger';
@@ -34,6 +38,7 @@ import {
   PublicationSchema,
   PublicationsQueryBodySchema, 
   RegionBaseSchema,
+  RegionSchema,
   type TransformedNewsItem,
 } from './schema';
 import type { FetchAllPagesResult, FetchResult } from './schema';
@@ -140,6 +145,41 @@ const authMiddleware = async (c: Context<{ Variables: Variables; Bindings: Env }
   await next();
 };
 
+// Helper function to handle database errors in a consistent way
+function handleDatabaseError(c: Context<{ Variables: Variables; Bindings: Env }>, error: unknown, defaultMessage = 'Database operation failed') {
+  const logger = c.get('logger');
+  
+  // Check if it's our custom database error
+  if (error instanceof Error && error.name === 'DatabaseError') {
+    const dbError = error as DatabaseError;
+    
+    logger.error('Database error', {
+      message: dbError.message,
+      details: dbError.details,
+    });
+
+    // Handle specific known error conditions
+    if (dbError.message.includes('already exists')) {
+      return c.json({ error: dbError.message }, 409); // Conflict
+    } 
+    
+    if (dbError.message.includes('not found')) {
+      return c.json({ error: dbError.message }, 404); // Not found
+    }
+
+    // General database error
+    return c.json({ error: dbError.message }, 500);
+  }
+
+  // Handle unexpected errors
+  logger.error('Unexpected error', { error });
+  if (error instanceof Error) {
+    return c.json({ error: error.message || defaultMessage }, 500);
+  }
+  
+  return c.json({ error: defaultMessage }, 500);
+}
+
 // --- Database CRUD Endpoints ---
 
 // --- Publications ---
@@ -170,14 +210,12 @@ app.post(
   }),
   zValidator('json', PublicationsQueryBodySchema),
   async (c) => {
-    const logger = c.get('logger');
     const filters = c.req.valid('json');
     try {
       const publications = await getPublications(c.env.DB, filters);
       return c.json(publications);
     } catch (error) {
-      logger.error('Error fetching publications', { error, filters });
-      return c.json({ error: 'Failed to fetch publications' }, 500);
+      return handleDatabaseError(c, error, 'Failed to fetch publications');
     }
   }
 );
@@ -186,7 +224,7 @@ app.post(
   '/publications',
   authMiddleware,
   describeRoute({
-    description: 'Create or update a publication',
+    description: 'Create a new publication',
     tags: ['Database - Publications'],
     security: [{ bearerAuth: [] }],
     requestBody: {
@@ -203,7 +241,7 @@ app.post(
     },
     responses: {
       201: {
-        description: 'Publication created/updated successfully',
+        description: 'Publication created successfully',
         content: {
           'application/json': {
             schema: PublicationSchema,
@@ -212,19 +250,73 @@ app.post(
       },
       400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      409: { description: 'Conflict - Publication already exists', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
   zValidator('json', InsertPublicationSchema),
   async (c) => {
-    const logger = c.get('logger');
     const publicationData = c.req.valid('json');
     try {
-      const [result] = await upsertPublication(c.env.DB, publicationData);
+      const [result] = await insertPublication(c.env.DB, publicationData);
       return c.json(result, 201);
     } catch (error) {
-      logger.error('Error upserting publication', { error, data: publicationData });
-      return c.json({ error: 'Failed to upsert publication' }, 500);
+      return handleDatabaseError(c, error, 'Failed to insert publication');
+    }
+  }
+);
+
+app.put(
+  '/publications/:id',
+  authMiddleware,
+  describeRoute({
+    description: 'Update an existing publication by ID',
+    tags: ['Database - Publications'],
+    security: [{ bearerAuth: [] }],
+     parameters: [{
+        in: 'path',
+        name: 'id',
+        schema: { type: 'string' },
+        required: true,
+        description: 'ID of the publication to update'
+    }],
+    requestBody: {
+      description: 'Publication data fields to update. The ID cannot be changed via this endpoint.',
+      content: {
+        'application/json': {
+           schema: InsertPublicationSchema.partial(),
+          example: {
+              name: "The Updated Example Times",
+              category: "tabloid"
+          }
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Publication updated successfully',
+        content: { 'application/json': { schema: PublicationSchema } }
+      },
+      400: { description: 'Bad Request (e.g., URL conflict)', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      404: { description: 'Publication not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    },
+  }),
+  zValidator('json', InsertPublicationSchema.partial()),
+  async (c) => {
+    const publicationId = c.req.param('id');
+    const updateData = c.req.valid('json');
+
+     if (Object.keys(updateData).length === 0) {
+        return c.json({ error: 'Request body cannot be empty for update' }, 400);
+    }
+
+    try {
+      const [result] = await updatePublication(c.env.DB, publicationId, updateData);
+      return c.json(result, 200);
+    } catch (error) {
+      return handleDatabaseError(c, error, 'Failed to update publication');
     }
   }
 );
@@ -233,7 +325,7 @@ app.delete(
   '/publications',
   authMiddleware,
   describeRoute({
-    description: 'Delete a publication using its URL provided in the request body',
+    description: 'Delete a publication using its ID provided in the request body',
     tags: ['Database - Publications'],
     security: [{ bearerAuth: [] }],
     requestBody: {
@@ -260,17 +352,15 @@ app.delete(
   }),
   zValidator('json', DeletePublicationBodySchema),
   async (c) => {
-    const logger = c.get('logger');
-    const { url } = c.req.valid('json');
+    const { id } = c.req.valid('json');
     try {
-      const [deleted] = await deletePublication(c.env.DB, url);
+      const [deleted] = await deletePublication(c.env.DB, id);
       if (!deleted) {
         return c.json({ error: 'Publication not found' }, 404);
       }
       return c.json(deleted);
     } catch (error) {
-      logger.error('Error deleting publication', { error, url });
-      return c.json({ error: 'Failed to delete publication' }, 500);
+      return handleDatabaseError(c, error, 'Failed to delete publication');
     }
   }
 );
@@ -294,13 +384,11 @@ app.get(
     },
   }),
   async (c) => {
-    const logger = c.get('logger');
     try {
       const regions = await getRegions(c.env.DB);
       return c.json(regions);
     } catch (error) {
-      logger.error('Error fetching regions', { error });
-      return c.json({ error: 'Failed to fetch regions' }, 500);
+      return handleDatabaseError(c, error, 'Failed to fetch regions');
     }
   }
 );
@@ -309,7 +397,7 @@ app.post(
   '/regions',
   authMiddleware,
   describeRoute({
-    description: 'Create or update a region',
+    description: 'Create a new region',
     tags: ['Database - Regions'],
     security: [{ bearerAuth: [] }],
     requestBody: {
@@ -324,28 +412,77 @@ app.post(
     },
     responses: {
       201: {
-        description: 'Region created/updated successfully',
+        description: 'Region created successfully',
         content: {
           'application/json': {
-            schema: RegionBaseSchema,
+            schema: RegionSchema,
           },
         },
       },
       400: { description: 'Bad Request', content: { 'application/json': { schema: ErrorResponseSchema } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      409: { description: 'Conflict - Region already exists', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
   zValidator('json', InsertRegionSchema),
   async (c) => {
-    const logger = c.get('logger');
     const regionData = c.req.valid('json');
     try {
-      const [result] = await upsertRegion(c.env.DB, regionData);
-      return c.json(RegionBaseSchema.parse(result), 201);
+      const [result] = await insertRegion(c.env.DB, regionData);
+      return c.json(RegionSchema.parse(result), 201);
     } catch (error) {
-      logger.error('Error upserting region', { error, data: regionData });
-      return c.json({ error: 'Failed to upsert region' }, 500);
+      return handleDatabaseError(c, error, 'Failed to insert region');
+    }
+  }
+);
+
+app.put(
+  '/regions/:id',
+  authMiddleware,
+  describeRoute({
+    description: 'Update an existing region by ID',
+    tags: ['Database - Regions'],
+    security: [{ bearerAuth: [] }],
+     parameters: [{
+        in: 'path',
+        name: 'id',
+        schema: { type: 'string' },
+        required: true,
+        description: 'ID of the region to update'
+    }],
+    requestBody: {
+      description: 'Region data fields to update. The ID cannot be changed via this endpoint.',
+      content: {
+        'application/json': {
+          schema: InsertRegionSchema.partial(),
+          example: {
+              name: "United Kingdom"
+          }
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Region updated successfully',
+        content: { 'application/json': { schema: RegionSchema } }
+      },
+      400: { description: 'Bad Request (e.g., name conflict)', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      404: { description: 'Region not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    },
+  }),
+  zValidator('json', InsertRegionSchema.partial()),
+  async (c) => {
+    const regionId = c.req.param('id');
+    const updateData = c.req.valid('json');
+
+    try {
+      const [result] = await updateRegion(c.env.DB, regionId, updateData);
+      return c.json(RegionSchema.parse(result), 200);
+    } catch (error) {
+      return handleDatabaseError(c, error, 'Failed to update region');
     }
   }
 );
@@ -354,7 +491,7 @@ app.delete(
   '/regions',
   authMiddleware,
   describeRoute({
-    description: 'Delete a region using its name provided in the request body',
+    description: 'Delete a region using its ID provided in the request body',
     tags: ['Database - Regions'],
     security: [{ bearerAuth: [] }],
     requestBody: {
@@ -369,7 +506,7 @@ app.delete(
         description: 'Region deleted successfully',
         content: {
           'application/json': {
-            schema: RegionBaseSchema,
+            schema: RegionSchema,
           },
         },
       },
@@ -381,17 +518,15 @@ app.delete(
   }),
   zValidator('json', DeleteRegionBodySchema),
   async (c) => {
-    const logger = c.get('logger');
-    const { name } = c.req.valid('json');
+    const { id } = c.req.valid('json');
     try {
-      const [deleted] = await deleteRegion(c.env.DB, name);
+      const [deleted] = await deleteRegion(c.env.DB, id);
       if (!deleted) {
         return c.json({ error: 'Region not found' }, 404);
       }
-      return c.json(RegionBaseSchema.parse(deleted));
+      return c.json(RegionSchema.parse(deleted));
     } catch (error) {
-      logger.error('Error deleting region', { error, name });
-      return c.json({ error: 'Failed to delete region' }, 500);
+      return handleDatabaseError(c, error, 'Failed to delete region');
     }
   }
 );
@@ -424,7 +559,6 @@ app.post(
   }),
   zValidator('json', HeadlinesQueryBodySchema),
   async (c) => {
-    const logger = c.get('logger');
     const body = c.req.valid('json');
     
     const headlineFilters = {
@@ -435,7 +569,7 @@ app.post(
       pageSize: body.pageSize,
       publicationFilters: {
           category: body.publicationCategory,
-          regions: body.publicationRegions,
+          regionNames: body.publicationRegionNames,
       }
     };
 
@@ -443,8 +577,7 @@ app.post(
       const headlines = await getHeadlines(c.env.DB, headlineFilters);
       return c.json(headlines);
     } catch (error) {
-      logger.error('Error fetching headlines', { error, filters: headlineFilters });
-      return c.json({ error: 'Failed to fetch headlines' }, 500);
+      return handleDatabaseError(c, error, 'Failed to fetch headlines');
     }
   }
 );
@@ -453,7 +586,7 @@ app.post(
   '/headlines',
   authMiddleware,
   describeRoute({
-    description: 'Create or update a headline',
+    description: 'Create a new headline',
     tags: ['Database - Headlines'],
     security: [{ bearerAuth: [] }],
     requestBody: {
@@ -475,7 +608,7 @@ app.post(
     },
     responses: {
       201: {
-        description: 'Headline created/updated successfully',
+        description: 'Headline created successfully',
         content: {
           'application/json': {
             schema: HeadlineSchema,
@@ -484,22 +617,74 @@ app.post(
       },
       400: { description: 'Bad Request / Publication Not Found', content: { 'application/json': { schema: ErrorResponseSchema } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      409: { description: 'Conflict - Headline URL already exists', content: { 'application/json': { schema: ErrorResponseSchema } } },
       500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
     },
   }),
   zValidator('json', InsertHeadlineSchema),
   async (c) => {
-    const logger = c.get('logger');
     const headlineData = c.req.valid('json');
     try {
-      const [result] = await upsertHeadline(c.env.DB, headlineData);
+      const [result] = await insertHeadline(c.env.DB, headlineData);
       return c.json(result, 201);
     } catch (error) {
-      logger.error('Error upserting headline', { error, data: headlineData });
-      if (error instanceof Error && error.message.includes('does not exist')) {
-        return c.json({ error: error.message }, 400);
-      }
-      return c.json({ error: 'Failed to upsert headline' }, 500);
+      return handleDatabaseError(c, error, 'Failed to insert headline');
+    }
+  }
+);
+
+app.put(
+  '/headlines/:id',
+  authMiddleware,
+  describeRoute({
+    description: 'Update an existing headline by its internal ID',
+    tags: ['Database - Headlines'],
+    security: [{ bearerAuth: [] }],
+     parameters: [{
+        in: 'path',
+        name: 'id',
+        schema: { type: 'string' },
+        required: true,
+        description: 'Internal ID of the headline to update'
+    }],
+    requestBody: {
+      description: 'Headline data fields to update. The ID and URL cannot be changed via this endpoint.',
+      content: {
+        'application/json': {
+          schema: InsertHeadlineSchema.partial().omit({ url: true }),
+          example: {
+              headline: "Updated: Example Headline Takes World by Storm",
+              snippet: "An updated snippet.",
+              category: "business",
+          }
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Headline updated successfully',
+        content: { 'application/json': { schema: HeadlineSchema } }
+      },
+      400: { description: 'Bad Request (e.g., invalid data, publication not found, URL conflict)', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      404: { description: 'Headline not found', content: { 'application/json': { schema: ErrorResponseSchema } } },
+      500: { description: 'Internal Server Error', content: { 'application/json': { schema: ErrorResponseSchema } } },
+    },
+  }),
+  zValidator('json', InsertHeadlineSchema.partial().omit({ url: true })),
+  async (c) => {
+    const headlineId = c.req.param('id');
+    const updateData = c.req.valid('json');
+
+     if (Object.keys(updateData).length === 0) {
+        return c.json({ error: 'Request body cannot be empty for update' }, 400);
+    }
+
+    try {
+      const [result] = await updateHeadlineById(c.env.DB, headlineId, updateData);
+      return c.json(result, 200);
+    } catch (error) {
+      return handleDatabaseError(c, error, 'Failed to update headline');
     }
   }
 );
@@ -535,7 +720,6 @@ app.delete(
   }),
   zValidator('json', DeleteHeadlineBodySchema),
   async (c) => {
-    const logger = c.get('logger');
     const { id } = c.req.valid('json');
     try {
       const [deleted] = await deleteHeadline(c.env.DB, id);
@@ -544,8 +728,7 @@ app.delete(
       }
       return c.json(deleted);
     } catch (error) {
-      logger.error('Error deleting headline', { error, id });
-      return c.json({ error: 'Failed to delete headline' }, 500);
+      return handleDatabaseError(c, error, 'Failed to delete headline');
     }
   }
 );
@@ -585,8 +768,8 @@ app.post(
   }),
   zValidator('json', HeadlinesFetchRequestSchema),
   async (c) => {
-    const logger = c.get('logger');
     const {dateRangeOption, customTbs, region, publicationUrls, maxQueriesPerPublication, flattenResults} = c.req.valid('json');
+    const logger = c.get('logger'); // Keep this one since we use it for multiple logs
 
     if (!c.env.SERPER_API_KEY) {
       const error = new Error('SERPER_API_KEY environment variable is not set');
@@ -604,7 +787,7 @@ app.post(
           getGeoParams(region),
           c.env.SERPER_API_KEY,
           maxQueriesPerPublication,
-          logger
+          c.get('logger')
         );
 
       const publicationPromises = publicationUrls.map(url => 
@@ -659,7 +842,7 @@ app.post(
             const parsedDate = parseSerperDate(item.rawDate);
             const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
             if (!keep && parsedDate) {
-              logger.debug({ 
+              c.get('logger').debug({ 
                 headline: item.headline, 
                 rawDate: item.rawDate, 
                 parsedDate: parsedDate.toISOString(),
@@ -667,7 +850,7 @@ app.post(
                 rangeEnd: dateRange.end.toISOString(), 
               }, 'Filtering result: Outside date range');
             } else if (!parsedDate) {
-              logger.debug({ 
+              c.get('logger').debug({ 
                 headline: item.headline, 
                 rawDate: item.rawDate 
               }, 'Filtering result: Could not parse date');
@@ -682,7 +865,7 @@ app.post(
 
       const filteredOutCount = totalItemsBeforeFiltering - totalItemsAfterFiltering;
       if (filteredOutCount > 0) {
-        logger.info(
+        c.get('logger').info(
           { filteredOutCount, totalItemsBeforeFiltering, totalItemsAfterFiltering },
           `Filtered out ${filteredOutCount} results based on publication date.`
         );
@@ -694,7 +877,7 @@ app.post(
       const successCount = results.filter((r) => r.status === 'fulfilled').length;
       const failureCount = results.filter((r) => r.status === 'rejected').length;
 
-      logger.info('Search completed successfully', {
+      c.get('logger').info('Search completed successfully', {
         totalResults,
         totalCreditsConsumed,
         totalQueriesMade,
@@ -729,8 +912,7 @@ app.post(
         },
       });
     } catch (error) {
-      const logger = c.get('logger');
-      logger.error('Search failed', { error });
+      c.get('logger').error('Search failed', { error });
       return c.json({ error: 'Failed to fetch news articles' }, 500);
     }
   }

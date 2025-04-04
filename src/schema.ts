@@ -3,7 +3,7 @@ import "zod-openapi/extend"; // Import the extend for .openapi()
 import { headlineCategories, publicationCategories } from './db/schema'; // Import enums
 
 // --- Base Schemas ---
-const RegionSchema = z.enum(['US', 'UK']);
+// const RegionSchema = z.enum(['US', 'UK']); // Remove unused enum conflicting with Zod schema
 const PublicationUrlsSchema = z
   .array(z.string().url({ message: 'Each publication URL must be a valid URL.' }))
   .min(1, { message: 'At least one publication URL is required.' });
@@ -76,7 +76,7 @@ const FetchResultSchema = z.discriminatedUnion('status', [FetchSuccessSchema, Fe
 // --- Request Schemas ---
 const HeadlinesFetchRequestBaseSchema = z.object({
   publicationUrls: PublicationUrlsSchema,
-  region: RegionSchema,
+  region: z.enum(['US', 'UK']),
   dateRangeOption: DateRangeEnumSchema.optional()
     .default('Past Week')
     .describe("Date range for the search. Defaults to 'Past Week' if not specified."),
@@ -121,9 +121,33 @@ export const HeadlinesFetchResponseSchema = z.object({
   summary: HeadlinesFetchSummarySchema,
 }).openapi({ ref: 'HeadlinesFetchResponse' });
 
+// Enhanced error schema with more details
 export const ErrorResponseSchema = z.object({
-  error: z.string(),
+  error: z.string().openapi({ description: 'Error message' }),
+  code: z.string().optional().openapi({ description: 'Error code for programmatic handling' }),
+  details: z.record(z.unknown()).optional().openapi({ 
+    description: 'Additional error details that may help in debugging or understanding the error' 
+  }),
 }).openapi({ ref: 'ErrorResponse' });
+
+// Define standard validation error messages
+const ValidationMessages = {
+  required: 'This field is required',
+  format: {
+    url: 'Must be a valid URL',
+    date: 'Must be a valid date in ISO format (YYYY-MM-DD)',
+    datetime: 'Must be a valid date and time in ISO format',
+  },
+  string: {
+    min: (min: number) => `Must be at least ${min} characters`,
+    max: (max: number) => `Must be at most ${max} characters`,
+    regex: 'Invalid format',
+  },
+  array: {
+    min: (min: number) => `Must have at least ${min} item(s)`,
+    max: (max: number) => `Must have at most ${max} item(s)`,
+  },
+};
 
 // --- Derived Types ---
 export type HeadlinesFetchRequestInput = z.input<typeof HeadlinesFetchRequestSchema>;
@@ -151,41 +175,61 @@ export type GeoParams = {
 
 // --- Basic Schemas ---
 export const PublicationBaseSchema = z.object({
-    name: z.string().openapi({ description: 'Name of the publication', example: 'The Example Times'}),
-    url: z.string().openapi({ description: 'Primary URL of the publication (used as ID)', example: 'https://example.com/news'}),
-    category: z.enum(publicationCategories).optional().nullable().openapi({ description: 'Category of the publication', example: 'broadsheet' }),
+    id: z.string().optional().openapi({ description: 'Internal unique ID (auto-generated)'}),
+    name: z.string().min(1, { message: ValidationMessages.string.min(1) })
+      .openapi({ description: 'Name of the publication', example: 'The Example Times'}),
+    url: z.string().url({ message: ValidationMessages.format.url })
+      .openapi({ description: 'Primary URL of the publication (must be unique)', example: 'https://example.com/news'}),
+    category: z.enum(publicationCategories).optional().nullable()
+      .openapi({ description: 'Category of the publication', example: 'broadsheet' }),
     createdAt: z.date().optional().openapi({ description: 'Timestamp of creation'}),
     updatedAt: z.date().optional().openapi({ description: 'Timestamp of last update'}),
 });
 
 export const RegionBaseSchema = z.object({
-    name: z.string().openapi({ description: 'Name of the region (used as ID)', example: 'UK'}),
+    id: z.string().optional().openapi({ description: 'Internal unique ID (auto-generated)'}),
+    name: z.string().min(1, { message: ValidationMessages.string.min(1) })
+      .openapi({ description: 'Name of the region (must be unique)', example: 'UK'}),
 });
 
 export const HeadlineBaseSchema = z.object({
     id: z.string().optional().openapi({ description: 'Internal unique ID (auto-generated)' }),
-    url: z.string().openapi({ description: 'Canonical URL of the headline (used as ID)', example: 'https://example.com/news/article123'}),
-    headline: z.string().openapi({ description: 'The headline text', example: 'Example Headline Takes World by Storm'}),
-    snippet: z.string().optional().nullable().openapi({ description: 'A short snippet or summary', example: 'An example snippet describing the headline.' }),
-    source: z.string().openapi({ description: 'The source or outlet reporting the headline', example: 'Example News Source' }),
-    rawDate: z.string().optional().nullable().openapi({ description: 'The original date string found for the headline', example: 'Jan 1, 2024' }),
+    url: z.string().url({ message: ValidationMessages.format.url })
+      .openapi({ description: 'Canonical URL of the headline (must be unique)', example: 'https://example.com/news/article123'}),
+    headline: z.string().min(1, { message: ValidationMessages.string.min(1) })
+      .openapi({ description: 'The headline text', example: 'Example Headline Takes World by Storm'}),
+    snippet: z.string().optional().nullable()
+      .openapi({ description: 'A short snippet or summary', example: 'An example snippet describing the headline.' }),
+    source: z.string().min(1, { message: ValidationMessages.string.min(1) })
+      .openapi({ description: 'The source or outlet reporting the headline', example: 'Example News Source' }),
+    rawDate: z.string().optional().nullable()
+      .openapi({ description: 'The original date string found for the headline', example: 'Jan 1, 2024' }),
     normalizedDate: z.string()
-      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { message: "Normalized date must be in DD/MM/YYYY format, if provided" })
+      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { 
+        message: "Normalized date must be in DD/MM/YYYY format, if provided" 
+      })
       .optional()
       .nullable()
       .openapi({ description: 'A date string in DD/MM/YYYY format for display or simple filtering', example: '01/01/2024'}),
-    category: z.enum(headlineCategories).optional().nullable().openapi({ description: 'Categorization of the headline topic', example: 'technology' }),
-    publicationUrl: z.string().openapi({ description: 'URL of the publication this headline belongs to (must match a publication URL)', example: 'bbc.co.uk' }),
+    category: z.enum(headlineCategories).optional().nullable()
+      .openapi({ description: 'Categorization of the headline topic', example: 'technology' }),
+    publicationId: z.string().min(1, { message: ValidationMessages.string.min(1) })
+      .openapi({ description: 'ID of the publication this headline belongs to', example: 'pub_abc123' }),
     createdAt: z.date().optional().openapi({ description: 'Timestamp of creation'}),
     updatedAt: z.date().optional().openapi({ description: 'Timestamp of last update'}),
 });
 
 // --- Schema for Select/Response (reflecting potential DB types) ---
 export const PublicationSchema = PublicationBaseSchema.extend({
+    id: z.string().openapi({ description: 'Internal unique ID' }),
     createdAt: z.coerce.date(),
     updatedAt: z.coerce.date(),
     publicationRegions: z.array(z.object({ regionName: z.string() })).optional().openapi({ description: 'Regions associated with this publication'}),
 }).openapi({ ref: 'Publication' });
+
+export const RegionSchema = RegionBaseSchema.extend({
+    id: z.string().openapi({ description: 'Internal unique ID' }),
+}).openapi({ ref: 'Region' });
 
 export const HeadlineSchema = HeadlineBaseSchema.extend({
     id: z.string().openapi({ description: 'Internal unique ID' }),
@@ -198,7 +242,7 @@ export const HeadlineSchema = HeadlineBaseSchema.extend({
 
 
 // --- Schema for Insert/Upsert (matching Insert types from queries.ts) ---
-export const InsertPublicationSchema = PublicationBaseSchema.omit({ createdAt: true, updatedAt: true })
+export const InsertPublicationSchema = PublicationBaseSchema.omit({ id: true, createdAt: true, updatedAt: true })
     .openapi({ 
         ref: 'InsertPublication',
         example: { 
@@ -207,7 +251,7 @@ export const InsertPublicationSchema = PublicationBaseSchema.omit({ createdAt: t
             category: "broadsheet"
         }
      }); 
-export const InsertRegionSchema = RegionBaseSchema
+export const InsertRegionSchema = RegionBaseSchema.omit({ id: true })
     .openapi({ 
         ref: 'InsertRegion',
         example: { name: "UK" }
@@ -223,7 +267,7 @@ export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdA
             rawDate: "4 Apr 2025",
             normalizedDate: "04/04/2025",
             category: "politics",
-            publicationUrl: "bbc.co.uk"
+            publicationId: "pub_abc123"
         }
     }); 
 
@@ -232,10 +276,10 @@ export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdA
 // Body for POST /publications/query (was GetPublicationsQuerySchema)
 export const PublicationsQueryBodySchema = z.object({
     category: z.enum(publicationCategories).optional().openapi({ description: 'Filter by publication category', example: 'broadsheet'}),
-    regions: z.preprocess(
+    regionNames: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.string()).optional()
-    ).openapi({ description: 'Filter by associated regions (comma-separated string or array)', example: ['UK','US'] }),
+    ).openapi({ description: 'Filter by associated region names (comma-separated string or array)', example: ['UK','US'] }),
 }).openapi({ ref: 'PublicationsQueryBody' });
 
 // Body for POST /headlines/query (was GetHeadlinesQueryObjectSchema)
@@ -243,10 +287,10 @@ export const HeadlinesQueryBodySchema = z.object({
     startDate: z.string().datetime().optional().openapi({ description: 'Filter by start date (ISO 8601 format)', example: '2024-01-01T00:00:00Z'}),
     endDate: z.string().datetime().optional().openapi({ description: 'Filter by end date (ISO 8601 format)', example: new Date().toISOString() }),
     publicationCategory: z.enum(publicationCategories).optional().openapi({ description: 'Filter by the category of the publication', example: 'broadcaster'}),
-    publicationRegions: z.preprocess(
+    publicationRegionNames: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.string()).optional()
-    ).openapi({ description: 'Filter by the regions associated with the publication (comma-separated string or array)', example: ['UK']}),
+    ).openapi({ description: 'Filter by the names of regions associated with the publication (comma-separated string or array)', example: ['UK']}),
     categories: z.preprocess(
         (val) => (typeof val === 'string' ? val.split(',') : val),
         z.array(z.enum(headlineCategories)).optional()
@@ -257,12 +301,12 @@ export const HeadlinesQueryBodySchema = z.object({
 
 // Body for DELETE /publications (was UrlParamSchema)
 export const DeletePublicationBodySchema = z.object({ 
-    url: z.string().openapi({ description: 'URL of the publication to delete', example: 'https://example.com/news' })
+    id: z.string().openapi({ description: 'ID of the publication to delete', example: 'pub_abc123' })
 }).openapi({ ref: 'DeletePublicationBody' });
 
 // Body for DELETE /regions (was NameParamSchema)
 export const DeleteRegionBodySchema = z.object({ 
-    name: z.string().openapi({ description: 'Name of the region to delete', example: 'UK' })
+    id: z.string().openapi({ description: 'ID of the region to delete', example: 'reg_uk123' })
 }).openapi({ ref: 'DeleteRegionBody' });
 
 // Body for DELETE /headlines (was IdParamSchema)
