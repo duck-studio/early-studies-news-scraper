@@ -215,7 +215,7 @@ app.post(
                 url: item.link,
                 snippet: item.snippet,
                 source: item.source,
-                publicationDate: item.date,
+                rawDate: item.date,
                 normalizedDate: parsedDate ? parsedDate.toLocaleDateString('en-GB') : null
               };
             }),
@@ -232,12 +232,12 @@ app.post(
           totalItemsBeforeFiltering += initialCount;
 
           result.results = result.results.filter((item: TransformedNewsItem) => {
-            const parsedDate = parseSerperDate(item.publicationDate);
+            const parsedDate = parseSerperDate(item.rawDate);
             const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
             if (!keep && parsedDate) {
               logger.debug({ 
                 headline: item.headline, 
-                publicationDate: item.publicationDate, 
+                rawDate: item.rawDate, 
                 parsedDate: parsedDate.toISOString(),
                 rangeStart: dateRange.start.toISOString(),
                 rangeEnd: dateRange.end.toISOString(), 
@@ -245,7 +245,7 @@ app.post(
             } else if (!parsedDate) {
               logger.debug({ 
                 headline: item.headline, 
-                publicationDate: item.publicationDate 
+                rawDate: item.rawDate 
               }, 'Filtering result: Could not parse date');
             }
             return keep; 

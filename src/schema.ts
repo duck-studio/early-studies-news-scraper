@@ -32,7 +32,7 @@ const TransformedNewsItemSchema = z.object({
   url: z.string(),
   snippet: z.string(),
   source: z.string(),
-  publicationDate: z.string(),
+  rawDate: z.string(),
 });
 
 const SerperSearchParametersSchema = z.object({

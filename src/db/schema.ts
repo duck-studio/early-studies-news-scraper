@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { nanoid } from 'nanoid';
 
-// Define allowed categories in camelCase
 export const publicationCategories = [
   'broadcaster',
   'broadsheet',
