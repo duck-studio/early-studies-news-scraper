@@ -1,7 +1,7 @@
 import { format } from 'date-fns';
 import { type InferInsertModel, type InferSelectModel, and, count, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1'; 
-import {headlineCategories, publicationCategories, schema} from './schema';
+import {headlineCategories, publicationCategories, schema, syncRunStatuses, syncRunTriggerTypes} from './schema';
 
 // --- Inferred Types ---
 export type Publication = InferSelectModel<typeof schema.publications>;
@@ -12,6 +12,8 @@ export type Headline = InferSelectModel<typeof schema.headlines>;
 export type InsertHeadline = InferInsertModel<typeof schema.headlines>;
 export type PublicationRegion = InferSelectModel<typeof schema.publicationRegions>;
 export type InsertPublicationRegion = InferInsertModel<typeof schema.publicationRegions>;
+export type SyncRun = InferSelectModel<typeof schema.syncRuns>;
+export type InsertSyncRun = InferInsertModel<typeof schema.syncRuns>;
 
 // --- Filter Types ---
 type PublicationFilters = {
@@ -633,5 +635,88 @@ export async function getHeadlineByUrl(db: D1Database, url: string): Promise<Hea
         url: url,
         errorMessage: getErrorMessage(error) 
     });
+  }
+}
+
+// --- Sync Run Specific Types ---
+// Represents the data needed to start a sync run record
+export type StartSyncRunData = {
+  triggerType: (typeof syncRunTriggerTypes)[number];
+  dateRangeOption?: string | null;
+  customTbs?: string | null;
+  maxQueriesPerPublication?: number | null;
+};
+
+// Represents the data needed to update a sync run record upon completion or failure
+export type UpdateSyncRunData = {
+  status: (typeof syncRunStatuses)[number];
+  summaryPublicationsFetched?: number | null;
+  summaryTotalHeadlinesFetched?: number | null;
+  summaryHeadlinesWithinRange?: number | null;
+  summaryWorkflowsTriggered?: number | null;
+  summaryWorkflowErrors?: number | null;
+  errorMessage?: string | null;
+};
+
+// --- Sync Run Queries ---
+
+export async function insertSyncRun(db: D1Database, data: StartSyncRunData): Promise<SyncRun> {
+  const drizzleDb = drizzle(db, { schema });
+  try {
+    const [newRun] = await drizzleDb
+      .insert(schema.syncRuns)
+      .values({
+        triggerType: data.triggerType,
+        dateRangeOption: data.dateRangeOption,
+        customTbs: data.customTbs,
+        maxQueriesPerPublication: data.maxQueriesPerPublication,
+        status: 'started', // Explicitly set status
+        // startedAt is handled by default
+      })
+      .returning();
+    if (!newRun) {
+        throw new Error('Failed to insert sync run, no record returned.');
+    }
+    return newRun;
+  } catch (error: unknown) {
+    throw createDbError('Failed to insert sync run record', { data, errorMessage: getErrorMessage(error) });
+  }
+}
+
+export async function updateSyncRun(db: D1Database, runId: string, data: UpdateSyncRunData): Promise<SyncRun> {
+  const drizzleDb = drizzle(db, { schema });
+  try {
+    const [updatedRun] = await drizzleDb
+      .update(schema.syncRuns)
+      .set({
+        ...data,
+        finishedAt: new Date(), // Set finished timestamp
+      })
+      .where(eq(schema.syncRuns.id, runId))
+      .returning();
+
+    if (!updatedRun) {
+      throw createDbError(`Sync run with ID ${runId} not found for update.`, { runId });
+    }
+    return updatedRun;
+  } catch (error: unknown) {
+     if (isDatabaseError(error)) {
+      throw error; // Re-throw our custom errors
+    }
+    throw createDbError('Failed to update sync run record', { runId, data, errorMessage: getErrorMessage(error) });
+  }
+}
+
+export async function getLastSyncRun(db: D1Database): Promise<SyncRun | null> {
+  const drizzleDb = drizzle(db, { schema });
+  try {
+    const result = await drizzleDb
+      .select()
+      .from(schema.syncRuns)
+      .orderBy(desc(schema.syncRuns.startedAt))
+      .limit(1);
+    return result[0] ?? null;
+  } catch (error: unknown) {
+    throw createDbError('Failed to get last sync run record', { errorMessage: getErrorMessage(error) });
   }
 }

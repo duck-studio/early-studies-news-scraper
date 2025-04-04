@@ -11,20 +11,24 @@ import { ZodError, z } from 'zod';
 import {
   type DatabaseError,
   type InsertHeadline,
+  type UpdateSyncRunData,
   deleteHeadline,
   deletePublication,
   deleteRegion,
   getHeadlineByUrl,
   getHeadlineStats,
   getHeadlines,
+  getLastSyncRun,
   getPublications,
   getRegions,
   insertHeadline,
   insertPublication,
   insertRegion,
+  insertSyncRun,
   updateHeadlineById,
   updatePublication,
   updateRegion,
+  updateSyncRun,
 } from './db/queries';
 import { headlineCategories } from './db/schema';
 import { fetchAllPagesForUrl, publicationLimit } from './fetcher';
@@ -41,6 +45,7 @@ import {
   InsertHeadlineSchema,
   InsertPublicationSchema,
   InsertRegionSchema,
+  LastSyncRunStdResponseSchema,
   ManualSyncRequestSchema,
   ManualSyncResponseDataSchema,
   ManualSyncStdResponseSchema,
@@ -1202,190 +1207,228 @@ app.onError((err, c) => {
 
 // --- Refactored Headline Sync Logic ---
 
-// Define the structure of the summary object returned by the sync function
 type SyncSummary = z.infer<typeof ManualSyncResponseDataSchema>;
 
 async function performHeadlineSync(
   env: Env,
   logger: Logger,
+  triggerType: 'manual' | 'scheduled',
   dateRangeOption: DateRangeEnum,
   customTbs: string | undefined,
   maxQueriesPerPublication: number
 ): Promise<SyncSummary> {
-    logger.info("Starting headline sync...", { dateRangeOption, maxQueriesPerPublication });
+    logger.info("Starting headline sync...", { triggerType, dateRangeOption, maxQueriesPerPublication });
 
-    // Check for necessary environment variables
-    if (!env.DB) {
-      logger.error('Sync task failed: DB environment variable is not set.');
-      throw new Error('Server configuration error: DB binding missing.');
-    }
-    if (!env.SERPER_API_KEY) {
-       logger.error('Sync task failed: SERPER_API_KEY environment variable is not set.');
-       throw new Error('Server configuration error: SERPER_API_KEY missing.');
-    }
-     if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
-       logger.error('Sync task failed: PROCESS_NEWS_ITEM_WORKFLOW binding is not set.');
-       throw new Error('Server configuration error: PROCESS_NEWS_ITEM_WORKFLOW binding missing.');
-    }
-
+    // --- Create Sync Run Record ---
+    let syncRunId: string | undefined;
     try {
-         // 1. Get Publication URLs and IDs
-        const publications = await getPublications(env.DB);
-        if (!publications || publications.length === 0) {
-            logger.info('No publications found in the database. Skipping sync.');
-            return {
-                publicationsFetched: 0,
-                totalHeadlinesFetched: 0,
-                headlinesWithinDateRange: 0,
-                workflowsTriggered: 0,
-                workflowErrors: 0,
-                dateRange: { start: new Date(0).toISOString(), end: new Date(0).toISOString() } // Placeholder range
-            };
-        }
-        // Create a map for easy ID lookup
-        const publicationUrlToIdMap = new Map<string, string>();
-        for (const pub of publications) {
-            if (pub.id && pub.url) { // Ensure ID and URL exist
-                publicationUrlToIdMap.set(pub.url, pub.id);
-            }
-        }
-        const publicationUrls = Array.from(publicationUrlToIdMap.keys());
-        logger.info(`Found ${publicationUrls.length} publications to fetch.`);
+      const newRun = await insertSyncRun(env.DB, {
+        triggerType,
+        dateRangeOption,
+        customTbs,
+        maxQueriesPerPublication,
+      });
+      syncRunId = newRun.id;
+      logger.info(`Created sync run record: ${syncRunId}`);
+    } catch (dbError) {
+       logger.error('Failed to create initial sync run record. Aborting sync.', { dbError });
+       throw new Error('Failed to initialize sync run logging.'); 
+    }
 
-        // 2. Setup Fetching Logic
-        const fetchLimit = pLimit(5); // Limit concurrent fetches to Serper
-        const region = 'UK'; // Defaulting to UK, make configurable if needed
-        const tbs = getTbsString(dateRangeOption, customTbs);
-        const geoParams = getGeoParams(region);
-        const dateRange = getDateRange(dateRangeOption);
+    let summary: SyncSummary | undefined;
+    try {
+         // --- Check Bindings ---
+         if (!env.SERPER_API_KEY) {
+           throw new Error('Server configuration error: SERPER_API_KEY missing.');
+         }
+         if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
+           throw new Error('Server configuration error: PROCESS_NEWS_ITEM_WORKFLOW binding missing.');
+         }
 
-        const fetchPromises = publicationUrls.map(url =>
-            fetchLimit(() => fetchAllPagesForUrl(
-                `https://${url}`,
-                tbs,
-                geoParams,
-                env.SERPER_API_KEY,
-                maxQueriesPerPublication,
-                logger
-            ))
-        );
-
-        // 3. Execute Fetches
-        logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
-        const fetchResults = await Promise.all(fetchPromises);
-        logger.info('Finished fetching headlines.');
-
-        // 4. Flatten and Process Results, Trigger Workflows
-        let headlinesFilteredCount = 0;
-        let workflowsTriggered = 0;
-        let workflowErrors = 0;
-        const workflowLimit = pLimit(10); // Limit concurrent workflow creations
-        const workflowPromises: Promise<unknown>[] = [];
-
-        // Flatten results and add publicationId
-        const processedHeadlines = fetchResults.flatMap(result => {
-            // Using debug logging for potentially large result objects
-            logger.debug({ url: result.url, hasError: !!result.error }, 'Processing fetch result');
-            if (result.error) {
-                logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
-                return []; // Skip failed fetches
-            }
-            const urlWithoutProtocol = result.url.replace('https://', '');
-            const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
-            if (!publicationId) {
-                logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
-                return []; // Skip if ID mapping failed
-            }
-            // Map each item to include the publicationId and ensure correct field mapping
-            const transformedResults = result.results.map(item => ({
-                url: item.link, // Use link from Serper result
-                headline: item.title, // Use title from Serper result
-                snippet: item.snippet ?? null,
-                source: item.source,
-                rawDate: item.date ?? null, // Use date from Serper result
-                normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
-                category: null, // Category determined later
-                publicationId, // Add the looked-up publication ID
-            }));
-            logger.debug({ url: result.url, count: transformedResults.length }, 'Transformed results for publication');
-            return transformedResults;
-        });
-
-        const totalFetched = processedHeadlines.length;
-        logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
-
-        // Iterate over the flattened and augmented headlines
-        for (const item of processedHeadlines) {
-            const parsedDate = parseSerperDate(item.rawDate);
-
-            // Filter by date range
-            if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
-                headlinesFilteredCount++;
-
-                // Construct complete params for the workflow
-                const workflowParams: ProcessNewsItemParams = {
-                    headlineUrl: item.url,
-                    publicationId: item.publicationId,
-                    headlineText: item.headline,
-                    snippet: item.snippet,
-                    source: item.source,
-                    rawDate: item.rawDate,
-                    normalizedDate: item.normalizedDate
+         // --- Main Sync Logic --- 
+          // 1. Get Publication URLs and IDs
+            const publications = await getPublications(env.DB);
+            if (!publications || publications.length === 0) {
+                logger.info('No publications found in the database. Finishing sync early.', { syncRunId });
+                summary = {
+                    publicationsFetched: 0,
+                    totalHeadlinesFetched: 0,
+                    headlinesWithinDateRange: 0,
+                    workflowsTriggered: 0,
+                    workflowErrors: 0,
+                    dateRange: { start: new Date(0).toISOString(), end: new Date(0).toISOString() }
                 };
-
-                workflowPromises.push(
-                    workflowLimit(async () => {
-                        try {
-                            const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
-                                params: workflowParams
-                            });
-                            logger.debug(`Triggered workflow ${instance.id} for headline: ${item.url}`);
-                            workflowsTriggered++;
-                        } catch (wfError) {
-                            logger.error(`Failed to trigger workflow for headline: ${item.url}`, { error: wfError });
-                            workflowErrors++;
-                        }
-                    })
-                );
-            } else if (parsedDate) {
-                 logger.debug({
-                    headline: item.headline,
-                    rawDate: item.rawDate,
-                    parsedDate: parsedDate.toISOString(),
-                    rangeStart: dateRange.start.toISOString(),
-                    rangeEnd: dateRange.end.toISOString(),
-                }, 'Sync: Filtering result outside date range');
-            } else {
-                 logger.debug({
-                    headline: item.headline,
-                    rawDate: item.rawDate
-                }, 'Sync: Filtering result, could not parse date');
+                 await updateSyncRun(env.DB, syncRunId, { 
+                    status: 'completed', 
+                    summaryPublicationsFetched: 0,
+                    summaryTotalHeadlinesFetched: 0,
+                    summaryHeadlinesWithinRange: 0,
+                    summaryWorkflowsTriggered: 0,
+                    summaryWorkflowErrors: 0,
+                 });
+                logger.info('Sync task finished early: No publications found.', { syncRunId });
+                return summary;
             }
-        }
+            const publicationUrlToIdMap = new Map<string, string>();
+            for (const pub of publications) {
+                if (pub.id && pub.url) { 
+                    publicationUrlToIdMap.set(pub.url, pub.id);
+                }
+            }
+            const publicationUrls = Array.from(publicationUrlToIdMap.keys());
+            logger.info(`Found ${publicationUrls.length} publications to fetch.`);
 
-        await Promise.allSettled(workflowPromises);
+            const fetchLimit = pLimit(5);
+            const region = 'UK';
+            const tbs = getTbsString(dateRangeOption, customTbs);
+            const geoParams = getGeoParams(region);
+            const dateRange = getDateRange(dateRangeOption);
 
-        const summary: SyncSummary = {
+            const fetchPromises = publicationUrls.map(url =>
+                fetchLimit(() => fetchAllPagesForUrl(
+                    `https://${url}`,
+                    tbs,
+                    geoParams,
+                    env.SERPER_API_KEY,
+                    maxQueriesPerPublication,
+                    logger
+                ))
+            );
+
+            logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
+            const fetchResults = await Promise.all(fetchPromises);
+            logger.info('Finished fetching headlines.');
+
+            let headlinesFilteredCount = 0;
+            let workflowsTriggered = 0;
+            let workflowErrors = 0;
+            const workflowLimit = pLimit(10); 
+            const workflowPromises: Promise<unknown>[] = [];
+
+            const processedHeadlines = fetchResults.flatMap(result => {
+                 logger.debug({ url: result.url, hasError: !!result.error }, 'Processing fetch result');
+                if (result.error) {
+                    logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
+                    return []; 
+                }
+                const urlWithoutProtocol = result.url.replace('https://', '');
+                const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
+                if (!publicationId) {
+                    logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
+                    return []; 
+                }
+                const transformedResults = result.results.map(item => ({
+                    url: item.link,
+                    headline: item.title, 
+                    snippet: item.snippet ?? null,
+                    source: item.source,
+                    rawDate: item.date ?? null,
+                    normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
+                    category: null,
+                    publicationId,
+                }));
+                logger.debug({ url: result.url, count: transformedResults.length }, 'Transformed results for publication');
+                return transformedResults;
+            });
+
+            const totalFetched = processedHeadlines.length;
+            logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
+
+            for (const item of processedHeadlines) {
+                const parsedDate = parseSerperDate(item.rawDate);
+                if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
+                    headlinesFilteredCount++;
+                    const workflowParams: ProcessNewsItemParams = {
+                        headlineUrl: item.url,
+                        publicationId: item.publicationId,
+                        headlineText: item.headline,
+                        snippet: item.snippet,
+                        source: item.source,
+                        rawDate: item.rawDate,
+                        normalizedDate: item.normalizedDate
+                    };
+                    workflowPromises.push(
+                        workflowLimit(async () => {
+                            try {
+                                const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({ params: workflowParams });
+                                logger.debug(`Triggered workflow ${instance.id} for headline: ${item.url}`);
+                                workflowsTriggered++;
+                            } catch (wfError) {
+                                logger.error(`Failed to trigger workflow for headline: ${item.url}`, { error: wfError });
+                                workflowErrors++;
+                            }
+                        })
+                    );
+                } else if (parsedDate) {
+                     logger.debug({ headline: item.headline, rawDate: item.rawDate, parsedDate: parsedDate.toISOString(), rangeStart: dateRange.start.toISOString(), rangeEnd: dateRange.end.toISOString() }, 'Sync: Filtering result outside date range');
+                } else {
+                     logger.debug({ headline: item.headline, rawDate: item.rawDate }, 'Sync: Filtering result, could not parse date');
+                }
+            }
+            await Promise.allSettled(workflowPromises);
+            
+         // --- Final Summary Calculation --- 
+         summary = {
             publicationsFetched: fetchResults.filter(r => !r.error).length,
             totalHeadlinesFetched: totalFetched,
             headlinesWithinDateRange: headlinesFilteredCount,
             workflowsTriggered,
             workflowErrors,
             dateRange: { start: dateRange.start.toISOString(), end: dateRange.end.toISOString() },
-        };
+         };
 
-        logger.info('Sync task finished.', summary);
+         // --- Update Sync Run Record (Completed) ---
+         await updateSyncRun(env.DB, syncRunId, {
+            status: 'completed',
+            summaryPublicationsFetched: summary.publicationsFetched,
+            summaryTotalHeadlinesFetched: summary.totalHeadlinesFetched,
+            summaryHeadlinesWithinRange: summary.headlinesWithinDateRange,
+            summaryWorkflowsTriggered: summary.workflowsTriggered,
+            summaryWorkflowErrors: summary.workflowErrors,
+         });
+
+        logger.info('Sync task finished successfully.', { syncRunId, ...summary });
         return summary;
 
     } catch (error) {
-        logger.error('Error during sync task execution:', { error });
-        // Re-throw the error to be handled by the caller (endpoint or scheduled handler)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('Error during sync task execution:', { syncRunId, error });
+
+        // Attempt to update Sync Run Record to Failed status
+        if (syncRunId) {
+            try {
+                 // Define the update payload ensuring required fields are present
+                 const updatePayload: UpdateSyncRunData = {
+                    status: 'failed',
+                    errorMessage: errorMessage,
+                    // Add summary fields only if the summary object exists
+                    ...(summary && {
+                        summaryPublicationsFetched: summary.publicationsFetched,
+                        summaryTotalHeadlinesFetched: summary.totalHeadlinesFetched,
+                        summaryHeadlinesWithinRange: summary.headlinesWithinDateRange,
+                        summaryWorkflowsTriggered: summary.workflowsTriggered,
+                        summaryWorkflowErrors: summary.workflowErrors,
+                    }),
+                    // Ensure other optional fields are explicitly undefined or null if not available
+                    summaryPublicationsFetched: summary?.publicationsFetched ?? null,
+                    summaryTotalHeadlinesFetched: summary?.totalHeadlinesFetched ?? null,
+                    summaryHeadlinesWithinRange: summary?.headlinesWithinDateRange ?? null,
+                    summaryWorkflowsTriggered: summary?.workflowsTriggered ?? null,
+                    summaryWorkflowErrors: summary?.workflowErrors ?? null,
+                 };
+                 
+                await updateSyncRun(env.DB, syncRunId, updatePayload);
+                 logger.info('Updated sync run record to failed status.', { syncRunId });
+            } catch (updateError) {
+                logger.error('Failed to update sync run record to failed status.', { syncRunId, updateError });
+            }
+        }
+        // Re-throw the original error that caused the failure
         throw error;
     }
 }
 
 // --- New Manual Sync Endpoint ---
-
 app.post(
   '/sync',
   authMiddleware,
@@ -1412,18 +1455,16 @@ app.post(
     const logger = c.get('logger');
 
     try {
-      // Run the sync logic asynchronously without blocking the response
-      // Note: If the sync takes longer than the Worker execution limit (~30s), 
-      // it might be terminated prematurely. For longer tasks, consider Durable Objects or queues.
+      // Pass 'manual' as the trigger type
       const syncSummary = await performHeadlineSync(
         c.env,
         logger, 
+        'manual', 
         dateRangeOption,
         customTbs,
         maxQueriesPerPublication
       );
 
-      // Return the summary upon successful completion
       return c.json({
         data: syncSummary,
         success: true,
@@ -1432,7 +1473,6 @@ app.post(
 
     } catch (error) {
       logger.error('Manual sync request failed', { error });
-      // Return a generic 500 error for any failure during the sync
       return c.json({
         data: null,
         success: false,
@@ -1446,33 +1486,78 @@ app.post(
   }
 );
 
-export default {
-  // Existing fetch handler
-  fetch: app.fetch,
+// --- New Endpoint to Get Last Sync Run ---
+app.get(
+  '/sync/latest',
+  describeRoute({
+    description: 'Get the details of the most recent sync run.',
+    tags: ['Sync'],
+    responses: {
+      200: {
+        description: 'Successful retrieval of the last sync run.',
+        content: { 'application/json': { schema: LastSyncRunStdResponseSchema } },
+      },
+      404: {
+        description: 'No sync runs found.',
+        content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse404_SyncLatest') } },
+      },
+      500: {
+        description: 'Internal Server Error',
+        content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_SyncLatest') } },
+      },
+    },
+  }),
+  async (c) => {
+    const logger = c.get('logger');
+    try {
+      const lastRun = await getLastSyncRun(c.env.DB);
 
-  // Updated scheduled handler
+      if (!lastRun) {
+        logger.info('No sync runs found in the database.');
+        return c.json({
+          data: null,
+          success: false,
+          error: { message: 'No sync runs found.', code: 'NOT_FOUND' }
+        }, 404);
+      }
+
+      return c.json({
+        data: lastRun, // Already conforms to SyncRunSchema
+        success: true,
+        error: null
+      }, 200);
+
+    } catch (error) {
+       // Use the standard DB error handler, providing a specific message
+       return handleDatabaseError(c, error, 'Failed to retrieve the last sync run');
+    }
+  }
+);
+
+export default {
+  fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const logger = createLogger(env); // Create a logger instance outside waitUntil
+    const logger = createLogger(env);
     logger.info(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
 
     ctx.waitUntil((async () => {
         try {
-            // Call the refactored sync function with default parameters
+            // Pass 'scheduled' as the trigger type
             await performHeadlineSync(
                 env, 
                 logger, 
-                'Past 24 Hours', // Default date range for cron
-                undefined,       // No custom TBS for cron
-                5                // Default max queries for cron
+                'scheduled',
+                'Past 24 Hours',
+                undefined,
+                5
             );
         } catch (error) {
-            // Logging is handled within performHeadlineSync, 
-            // but we catch here to prevent waitUntil from throwing unhandled errors.
             logger.error('Scheduled headline sync failed.', { error });
+            // Error is already logged and run record updated within performHeadlineSync
         }
-    })()); // End ctx.waitUntil execution
+    })());
   }
-}; // Ensure export default is an object
+};
 
 // Define the Workflow parameters - include necessary fields for insertion
 type ProcessNewsItemParams = {

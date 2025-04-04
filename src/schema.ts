@@ -512,3 +512,29 @@ export const ManualSyncStdResponseSchema = createStandardResponseSchema(
     ManualSyncResponseDataSchema,
     'ManualSyncResponse'
 );
+
+// --- Sync Run API Schema ---
+
+// Define the base schema corresponding to the syncRuns table
+export const SyncRunSchema = z.object({
+    id: z.string().openapi({ description: 'Unique ID of the sync run.' }),
+    triggerType: z.enum(['manual', 'scheduled']).openapi({ description: 'How the sync was triggered.' }),
+    status: z.enum(['started', 'completed', 'failed']).openapi({ description: 'Current status of the sync run.' }),
+    startedAt: z.coerce.date().openapi({ description: 'Timestamp when the sync run started.' }),
+    finishedAt: z.coerce.date().nullable().openapi({ description: 'Timestamp when the sync run finished (null if not finished).' }),
+    dateRangeOption: z.string().nullable().openapi({ description: 'The date range option used for the sync.' }),
+    customTbs: z.string().nullable().openapi({ description: 'The custom TBS string used, if any.' }),
+    maxQueriesPerPublication: z.number().int().nullable().openapi({ description: 'The max queries setting used.' }),
+    summaryPublicationsFetched: z.number().int().nullable().openapi({ description: 'Number of publications fetched.' }),
+    summaryTotalHeadlinesFetched: z.number().int().nullable().openapi({ description: 'Total headlines fetched.' }),
+    summaryHeadlinesWithinRange: z.number().int().nullable().openapi({ description: 'Headlines within the date range.' }),
+    summaryWorkflowsTriggered: z.number().int().nullable().openapi({ description: 'Workflows triggered.' }),
+    summaryWorkflowErrors: z.number().int().nullable().openapi({ description: 'Workflow errors encountered.' }),
+    errorMessage: z.string().nullable().openapi({ description: "Error message if the status is 'failed'." })
+}).openapi({ ref: 'SyncRun' });
+
+// Standard response for getting the last sync run
+export const LastSyncRunStdResponseSchema = createStandardResponseSchema(
+    SyncRunSchema, // Use the SyncRunSchema for the data part
+    'LastSyncRunResponse'
+);

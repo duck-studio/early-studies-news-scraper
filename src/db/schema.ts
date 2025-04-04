@@ -146,11 +146,55 @@ export const headlineRelations = relations(headlines, ({ one }) => ({
   }),
 }));
 
+// --- Sync Runs Table ---
+
+export const syncRunTriggerTypes = ['manual', 'scheduled'] as const;
+export const syncRunStatuses = ['started', 'completed', 'failed'] as const;
+
+export const syncRuns = sqliteTable(
+  'sync_runs',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => nanoid(10)), // Slightly longer ID for runs
+    triggerType: text('trigger_type', { enum: syncRunTriggerTypes })
+      .notNull(),
+    status: text('status', { enum: syncRunStatuses })
+      .notNull()
+      .default('started'),
+    startedAt: integer('started_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(strftime('%s', 'now'))`),
+    finishedAt: integer('finished_at', { mode: 'timestamp' }), // Nullable until finished
+    
+    // Input Parameters
+    dateRangeOption: text('date_range_option'), // Store the string enum value
+    customTbs: text('custom_tbs'),
+    maxQueriesPerPublication: integer('max_queries_per_publication'),
+
+    // Summary Results (nullable until completed)
+    summaryPublicationsFetched: integer('summary_publications_fetched'),
+    summaryTotalHeadlinesFetched: integer('summary_total_headlines_fetched'),
+    summaryHeadlinesWithinRange: integer('summary_headlines_within_range'),
+    summaryWorkflowsTriggered: integer('summary_workflows_triggered'),
+    summaryWorkflowErrors: integer('summary_workflow_errors'),
+    
+    // Error Details (nullable)
+    errorMessage: text('error_message'),
+  },
+  (table) => ({
+    startedAtIdx: index('sync_runs_started_at_idx').on(table.startedAt),
+    statusIdx: index('sync_runs_status_idx').on(table.status),
+    triggerTypeIdx: index('sync_runs_trigger_type_idx').on(table.triggerType),
+  })
+);
+
 export const schema = {
   publications,
   regions,
   publicationRegions,
   headlines,
+  syncRuns,
   publicationRelations,
   regionRelations,
   publicationRegionRelations,
