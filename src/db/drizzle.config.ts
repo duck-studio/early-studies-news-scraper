@@ -24,7 +24,7 @@ const getLocalD1 = () => {
 };
 
 const baseConfig = {
-  schema: './src/db/index.ts',
+  schema: './src/db/schema.ts',
   out: './src/db/migrations',
   dialect: 'sqlite',
 } as const;

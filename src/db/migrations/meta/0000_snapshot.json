@@ -1,0 +1,325 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "3d6c2ea0-3902-49b2-a42a-e7c5adbbd18a",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "tables": {
+    "headlines": {
+      "name": "headlines",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "headline": {
+          "name": "headline",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "snippet": {
+          "name": "snippet",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_date": {
+          "name": "raw_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "normalized_date": {
+          "name": "normalized_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "publication_id": {
+          "name": "publication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%s', 'now'))"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "(strftime('%s', 'now'))"
+        }
+      },
+      "indexes": {
+        "headlines_url_unique": {
+          "name": "headlines_url_unique",
+          "columns": [
+            "url"
+          ],
+          "isUnique": true
+        },
+        "headlines_publication_id_idx": {
+          "name": "headlines_publication_id_idx",
+          "columns": [
+            "publication_id"
+          ],
+          "isUnique": false
+        },
+        "headlines_normalized_date_idx": {
+          "name": "headlines_normalized_date_idx",
+          "columns": [
+            "normalized_date"
+          ],
+          "isUnique": false
+        },
+        "headlines_headline_idx": {
+          "name": "headlines_headline_idx",
+          "columns": [
+            "headline"
+          ],
+          "isUnique": false
+        },
+        "headlines_headline_date_idx": {
+          "name": "headlines_headline_date_idx",
+          "columns": [
+            "headline",
+            "normalized_date"
+          ],
+          "isUnique": false
+        },
+        "headlines_url_idx": {
+          "name": "headlines_url_idx",
+          "columns": [
+            "url"
+          ],
+          "isUnique": false
+        },
+        "headlines_category_idx": {
+          "name": "headlines_category_idx",
+          "columns": [
+            "category"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "headlines_publication_id_publications_url_fk": {
+          "name": "headlines_publication_id_publications_url_fk",
+          "tableFrom": "headlines",
+          "tableTo": "publications",
+          "columnsFrom": [
+            "publication_id"
+          ],
+          "columnsTo": [
+            "url"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "publication_regions": {
+      "name": "publication_regions",
+      "columns": {
+        "publication_url": {
+          "name": "publication_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "region_name": {
+          "name": "region_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "pub_regions_pub_url_idx": {
+          "name": "pub_regions_pub_url_idx",
+          "columns": [
+            "publication_url"
+          ],
+          "isUnique": false
+        },
+        "pub_regions_region_name_idx": {
+          "name": "pub_regions_region_name_idx",
+          "columns": [
+            "region_name"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "publication_regions_publication_url_publications_url_fk": {
+          "name": "publication_regions_publication_url_publications_url_fk",
+          "tableFrom": "publication_regions",
+          "tableTo": "publications",
+          "columnsFrom": [
+            "publication_url"
+          ],
+          "columnsTo": [
+            "url"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "publication_regions_region_name_regions_name_fk": {
+          "name": "publication_regions_region_name_regions_name_fk",
+          "tableFrom": "publication_regions",
+          "tableTo": "regions",
+          "columnsFrom": [
+            "region_name"
+          ],
+          "columnsTo": [
+            "name"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "publication_regions_publication_url_region_name_pk": {
+          "columns": [
+            "publication_url",
+            "region_name"
+          ],
+          "name": "publication_regions_publication_url_region_name_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "publications": {
+      "name": "publications",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(strftime('%s', 'now'))"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "(strftime('%s', 'now'))"
+        }
+      },
+      "indexes": {
+        "publications_category_idx": {
+          "name": "publications_category_idx",
+          "columns": [
+            "category"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "regions": {
+      "name": "regions",
+      "columns": {
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}
