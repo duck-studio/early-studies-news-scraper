@@ -1,7 +1,7 @@
 {
   "name": "early-studies-api",
   "main": "src/index.ts",
-  "compatibility_date": "2024-01-01",
+  "compatibility_date": "2025-04-04",
   "compatibility_flags": [
     "nodejs_compat"
   ],

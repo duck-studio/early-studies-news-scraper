@@ -1461,8 +1461,14 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
          console.log('Successfully inserted new headline:', headlineUrl);
          return { inserted: true }; // Indicate success
       } catch (dbError) {
+          // Check if it's the specific "already exists" error
+          if (dbError instanceof Error && dbError.name === 'DatabaseError' && dbError.message.includes('already exists')) {
+             console.warn(`Workflow Step Warning: Headline likely inserted concurrently. URL: ${headlineUrl}`, { dbErrorDetails: (dbError as DatabaseError).details });
+             // Don't re-throw; consider this path successful as the record exists.
+             return { inserted: false, concurrent: true }; 
+          }
+          // If it wasn't the "already exists" error, log and re-throw to trigger retry
           console.error('Workflow Step Error: Failed to insert headline', { headlineData, dbError });
-          // Throw error to force retry
           throw dbError;
       }
     });
