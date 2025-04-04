@@ -339,14 +339,38 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
     console.log("Starting ProcessNewsItemWorkflow for:", event.payload.headlineUrl);
 
-    await step.do('initial-processing-step', async () => {
-      // In a real scenario, you'd perform actions like:
-      // - Fetching the full article content
-      // - Analyzing the content (e.g., sentiment analysis, entity extraction)
-      // - Storing results in the database (this.env.DB)
-      console.log('Processing step for:', event.payload.headlineUrl);
-      // Return some state if needed for subsequent steps
-      return { processed: true };
+    const existingRecord = await step.do('check database for existing record', async () => {
+      console.log('Checking database for:', event.payload.headlineUrl);
+      // In a real scenario, query this.env.DB
+      // const record = await this.env.DB.prepare('SELECT * FROM headlines WHERE url = ?').bind(event.payload.headlineUrl).first();
+      // return { exists: !!record };
+      return { exists: false }; // Placeholder
+    });
+
+    if (existingRecord.exists) {
+      console.log('Record already exists, skipping further processing for:', event.payload.headlineUrl);
+      return; // Exit the workflow if the record exists
+    }
+
+    const analysisResult = await step.do('analyze and tag headline', async () => {
+      console.log('Analyzing and tagging headline:', event.payload.headlineUrl);
+      // In a real scenario, perform analysis (e.g., using Workers AI)
+      // return { tags: ['example-tag'], sentiment: 'neutral' };
+      return { tags: [], sentiment: null }; // Placeholder
+    });
+
+    await step.do('store headline in db', async () => {
+      console.log('Storing headline in DB:', event.payload.headlineUrl);
+      // In a real scenario, insert into this.env.DB using data from previous steps
+      // await this.env.DB.prepare('INSERT INTO headlines (url, tags, sentiment) VALUES (?, ?, ?)')
+      //  .bind(event.payload.headlineUrl, JSON.stringify(analysisResult.tags), analysisResult.sentiment)
+      //  .run();
+      console.log(
+        'Placeholder: Headline stored for', 
+        event.payload.headlineUrl, 
+        'with analysis:', 
+        analysisResult
+      );
     });
 
     console.log("Finished ProcessNewsItemWorkflow for:", event.payload.headlineUrl);

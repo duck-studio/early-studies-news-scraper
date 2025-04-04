@@ -76,6 +76,74 @@ Example Query: site:example.com with timeframe parameter 'tbs=${tbs}'`);
   return tbs;
 }
 
+export function tbsToDateRange(tbs: string): DateRange {
+  let endDate = new Date(); // Default end date is now
+  let startDate: Date;
+
+  // Helper to parse M/D/YYYY format
+  const parseCustomDate = (dateStr: string): Date | null => {
+    if (!dateStr) return null;
+    // Try parsing M/d/yyyy (e.g., 8/1/2024)
+    const parsed = parse(dateStr, 'M/d/yyyy', new Date());
+    return isValid(parsed) ? parsed : null;
+  };
+
+  // Handle known 'qdr:' values first
+  switch (tbs) {
+    case 'qdr:h': // Past Hour
+      startDate = subHours(endDate, 1);
+      break;
+    case 'qdr:d': // Past 24 Hours (Day)
+      startDate = subDays(endDate, 1);
+      break;
+    case 'qdr:w': // Past Week
+      startDate = subWeeks(endDate, 1);
+      break;
+    case 'qdr:m': // Past Month
+      startDate = subMonths(endDate, 1);
+      break;
+    case 'qdr:y': // Past Year
+      startDate = subYears(endDate, 1);
+      break;
+    default:
+      // Attempt to parse custom 'cd_min' and 'cd_max'
+      {
+        const minMatch = tbs.match(/cd_min:([^,]+)/);
+        const maxMatch = tbs.match(/cd_max:([^,]+)/);
+
+        let customStart: Date | null = null;
+        let customEnd: Date | null = null;
+
+        if (minMatch?.[1]) {
+          customStart = parseCustomDate(minMatch[1]);
+        }
+        if (maxMatch?.[1]) {
+          // Google often sets the end date to the *start* of the day.
+          // To make it inclusive, we might want to set it to the end of that day.
+          // However, for simplicity and direct mapping, we'll parse it directly first.
+          // Consider adjusting if precise end-of-day is needed.
+          customEnd = parseCustomDate(maxMatch[1]);
+        }
+
+        if (customStart) {
+          startDate = customStart;
+          // If a custom start is parsed, use custom end if available, otherwise default end (now)
+          if (customEnd) {
+            endDate = customEnd; // Use the parsed custom end date
+          }
+          // console.log(`Parsed custom date range: ${startDate} - ${endDate}`); // Optional logging
+        } else {
+          // Fall back to Past Week if custom parsing fails or tbs is unrecognized
+          // console.warn(`Unsupported or invalid custom TBS '${tbs}', falling back to Past Week.`);
+          startDate = subWeeks(endDate, 1);
+        }
+      }
+      break;
+  }
+
+  return { start: startDate, end: endDate };
+}
+
 /**
  * Maps the application's region ('US' | 'UK') to Serper's
  * geographical parameters ('gl' and 'location').
