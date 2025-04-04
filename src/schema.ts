@@ -296,6 +296,16 @@ export const InsertHeadlineSchema = HeadlineBaseSchema.omit({ id: true, createdA
 
 // --- Schemas for Request Bodies (Replacing Params/Queries) ---
 
+// Body for POST /stats/headlines
+export const StatsQueryBodySchema = z.object({
+    startDate: z.string()
+      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { message: "Start date must be in DD/MM/YYYY format" })
+      .openapi({ description: 'Start date for statistics range (DD/MM/YYYY format)', example: '01/05/2024'}),
+    endDate: z.string()
+      .regex(/^\d{2}\/\d{2}\/\d{4}$/, { message: "End date must be in DD/MM/YYYY format" })
+      .openapi({ description: 'End date for statistics range (DD/MM/YYYY format)', example: '31/05/2024'}),
+}).openapi({ ref: 'StatsQueryBody' });
+
 // Body for POST /publications/query (was GetPublicationsQuerySchema)
 export const PublicationsQueryBodySchema = z.object({
     category: z.enum(publicationCategories).optional().openapi({ description: 'Filter by publication category', example: 'broadcaster'}),
@@ -355,6 +365,43 @@ export const HeadlinesQueryResponseSchema = z.object({
 }).openapi({ ref: 'HeadlinesQueryResponse' });
 
 // --- Response Schemas using the standard format ---
+
+// Define the structure for the data part of the stats response
+const CategoryPercentageSchema = z.record(
+    z.string(), // Category name
+    z.number().min(0).max(100) // Percentage
+).openapi({ 
+    description: 'Percentage breakdown of headlines by category.',
+    example: { politics: 55.5, world: 20.0, technology: 15.5, business: 9.0 }
+});
+
+const PublicationCountSchema = z.object({
+    publication: PublicationSchema.pick({ id: true, name: true, url: true, category: true }), // Include specific publication fields
+    count: z.number().int().positive().openapi({ description: 'Number of headlines for this publication in the range.' })
+}).openapi({ 
+    ref: 'PublicationCount',
+    description: 'Headline count per publication within the date range.' 
+});
+
+const DailyCountSchema = z.object({
+    date: z.string().openapi({ description: 'Date (DD/MM/YYYY)' }),
+    count: z.number().int().positive().openapi({ description: 'Number of headlines on this date.' })
+}).openapi({ 
+    ref: 'DailyCount',
+    description: 'Headline count per day within the date range.'
+});
+
+export const HeadlinesStatsSchema = z.object({
+    categoryPercentage: CategoryPercentageSchema,
+    publicationCounts: z.array(PublicationCountSchema),
+    dailyCounts: z.array(DailyCountSchema)
+}).openapi({ ref: 'HeadlinesStatsData' });
+
+// Standard response schema for the stats endpoint
+export const HeadlinesStatsResponseSchema = createStandardResponseSchema(
+    HeadlinesStatsSchema,
+    'HeadlinesStatsResponse'
+);
 
 // Example: Standard response for getting a single publication
 export const PublicationResponseSchema = createStandardResponseSchema(

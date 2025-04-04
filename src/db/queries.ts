@@ -514,3 +514,100 @@ export async function deleteHeadline(db: D1Database, id: string) {
     throw createDbError('Failed to delete headline', { id, errorMessage: getErrorMessage(error) });
   }
 }
+
+// --- Statistics --- 
+
+// Type for the raw stats data returned from the DB query
+type RawHeadlineStats = {
+  totalCount: number;
+  categoryCounts: { category: string | null; count: number }[];
+  publicationCounts: { 
+    count: number; 
+    publicationId: string; 
+    publicationName: string;
+    publicationUrl: string;
+    publicationCategory: (typeof publicationCategories)[number] | null;
+  }[];
+  dailyCounts: { normalizedDate: string | null; count: number }[];
+};
+
+export async function getHeadlineStats(db: D1Database, startDate: Date, endDate: Date): Promise<RawHeadlineStats> {
+  const drizzleDb = drizzle(db, { schema });
+
+  // Helper to format date to YYYY-MM-DD for comparison
+  const formatDateForCompare = (date: Date): string => {
+      return format(date, 'yyyy-MM-dd');
+  }
+
+  // Convert DD/MM/YYYY stored in normalizedDate to YYYY-MM-DD for comparison
+  const normalizedDateYYYYMMDD = sql<string>`substr(${schema.headlines.normalizedDate}, 7, 4) || '-' || substr(${schema.headlines.normalizedDate}, 4, 2) || '-' || substr(${schema.headlines.normalizedDate}, 1, 2)`;
+
+  const startDateStr = formatDateForCompare(startDate);
+  const endDateStr = formatDateForCompare(endDate);
+
+  // Base condition for date range filtering
+  const dateCondition = and(
+    gte(normalizedDateYYYYMMDD, startDateStr),
+    lte(normalizedDateYYYYMMDD, endDateStr)
+  );
+
+  try {
+    // Use Promise.all to run aggregations concurrently
+    const [totalResult, categoryCountsResult, publicationCountsResult, dailyCountsResult] = await Promise.all([
+      // 1. Get total count in range
+      drizzleDb.select({ total: count() })
+        .from(schema.headlines)
+        .where(dateCondition),
+
+      // 2. Get counts per category
+      drizzleDb.select({ 
+          category: schema.headlines.category, 
+          count: count() 
+        })
+        .from(schema.headlines)
+        .where(dateCondition)
+        .groupBy(schema.headlines.category),
+
+      // 3. Get counts per publication (joining to get details)
+      drizzleDb.select({ 
+          count: count(), 
+          publicationId: schema.publications.id,
+          publicationName: schema.publications.name,
+          publicationUrl: schema.publications.url,
+          publicationCategory: schema.publications.category,
+        })
+        .from(schema.headlines)
+        .innerJoin(schema.publications, eq(schema.headlines.publicationId, schema.publications.id))
+        .where(dateCondition)
+        .groupBy(schema.publications.id, schema.publications.name, schema.publications.url, schema.publications.category)
+        .orderBy(desc(count())),
+
+      // 4. Get counts per day (using the original DD/MM/YYYY date for grouping)
+      drizzleDb.select({ 
+          normalizedDate: schema.headlines.normalizedDate, 
+          count: count() 
+        })
+        .from(schema.headlines)
+        .where(dateCondition)
+        .groupBy(schema.headlines.normalizedDate)
+        .orderBy(schema.headlines.normalizedDate), // Order by DD/MM/YYYY string
+    ]);
+
+    const totalCount = Number(totalResult[0]?.total ?? 0);
+
+    return {
+      totalCount,
+      categoryCounts: categoryCountsResult,
+      publicationCounts: publicationCountsResult,
+      dailyCounts: dailyCountsResult,
+    };
+
+  } catch (error: unknown) {
+    // Use the standard error creation helper
+    throw createDbError('Failed to get headline statistics', { 
+        startDate: startDateStr, 
+        endDate: endDateStr, 
+        errorMessage: getErrorMessage(error) 
+    });
+  }
+}

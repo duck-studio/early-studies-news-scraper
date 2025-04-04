@@ -12,6 +12,7 @@ import {
   deleteHeadline,
   deletePublication,
   deleteRegion,
+  getHeadlineStats,
   getHeadlines,
   getPublications,
   getRegions,
@@ -32,6 +33,7 @@ import {
   HeadlinesFetchStdResponseSchema,
   HeadlinesQueryBodySchema,
   HeadlinesQueryStdResponseSchema,
+  HeadlinesStatsResponseSchema,
   InsertHeadlineSchema,
   InsertPublicationSchema,
   InsertRegionSchema,
@@ -43,6 +45,7 @@ import {
   SinglePublicationResponseSchema,
   SingleRegionResponseSchema,
   StandardErrorSchema,
+  StatsQueryBodySchema,
   type TransformedNewsItem,
   createStandardResponseSchema,
 } from './schema';
@@ -1040,6 +1043,115 @@ app.post(
         success: false,
         error: { message: 'Failed to fetch news articles', code: 'FETCH_FAILED', details: error instanceof Error ? error.message : String(error) }
       }, 500);
+    }
+  }
+);
+
+// --- Statistics Endpoints ---
+
+app.post(
+  '/stats/headlines',
+  describeRoute({
+    description: 'Get statistics about headlines within a date range.',
+    tags: ['Statistics'],
+    requestBody: {
+      content: { 'application/json': { schema: StatsQueryBodySchema } }
+    },
+    responses: {
+       200: {
+         description: 'Successful statistics query',
+         content: { 'application/json': { schema: HeadlinesStatsResponseSchema } },
+       },
+       400: { description: 'Bad Request (Invalid Date Format)', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_Stats') } } },
+       500: { description: 'Internal Server Error', content: { 'application/json': { schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_Stats') } } },
+    },
+  }),
+  zValidator('json', StatsQueryBodySchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const logger = c.get('logger');
+
+    const startDate = parseDdMmYyyy(body.startDate);
+    const endDate = parseDdMmYyyy(body.endDate);
+
+    // Validate dates
+    if (!startDate) {
+      logger.warn('Invalid start date format provided:', { startDate: body.startDate });
+      c.status(400);
+      return c.json({
+         data: null,
+         success: false,
+         error: { message: 'Invalid start date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+       });
+    }
+    if (!endDate) {
+      logger.warn('Invalid end date format provided:', { endDate: body.endDate });
+       c.status(400);
+       return c.json({
+         data: null,
+         success: false,
+         error: { message: 'Invalid end date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' }
+       });
+    }
+    if (startDate > endDate) {
+       c.status(400);
+        return c.json({
+          data: null,
+          success: false,
+          error: { message: 'Start date cannot be after end date.', code: 'VALIDATION_ERROR' }
+        });
+    }
+
+    try {
+      const rawStats = await getHeadlineStats(c.env.DB, startDate, endDate);
+
+      // Process raw stats into the desired response format
+
+      // 1. Calculate Category Percentages
+      const categoryPercentage: Record<string, number> = {};
+      if (rawStats.totalCount > 0) {
+          for (const item of rawStats.categoryCounts) {
+              const categoryName = item.category ?? 'uncategorized';
+              const percentage = parseFloat(((item.count / rawStats.totalCount) * 100).toFixed(2));
+              categoryPercentage[categoryName] = percentage;
+          }
+      }
+
+      // 2. Format Publication Counts
+      const publicationCounts = rawStats.publicationCounts.map(item => ({
+          publication: {
+              id: item.publicationId,
+              name: item.publicationName,
+              url: item.publicationUrl,
+              category: item.publicationCategory,
+          },
+          count: item.count,
+      }));
+
+       // 3. Format Daily Counts
+      const dailyCounts = rawStats.dailyCounts
+        .filter((item): item is { normalizedDate: string; count: number } => item.normalizedDate !== null)
+        .map(item => ({
+            date: item.normalizedDate,
+            count: item.count,
+        }));
+
+      const statsData = {
+        categoryPercentage,
+        publicationCounts,
+        dailyCounts,
+      };
+
+      // Return standard success response
+      return c.json({
+        data: statsData,
+        success: true,
+        error: null
+      }, 200);
+
+    } catch (error) {
+      // Use the standard DB error handler
+      return handleDatabaseError(c, error, 'Failed to fetch headline statistics');
     }
   }
 );
