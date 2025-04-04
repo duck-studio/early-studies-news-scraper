@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS headlines (
   headline TEXT NOT NULL,
   snippet TEXT,
   source TEXT NOT NULL,
-  publication_date TEXT,
+  raw_date TEXT,
   normalized_date TEXT,
   category TEXT CHECK( category IN ('breakingNews', 'politics', 'world', 'business', 'technology', 'science', 'health', 'sports', 'entertainment', 'lifestyle', 'environment', 'crime', 'education', 'artsCulture', 'opinion', 'other') ),
   publication_id TEXT NOT NULL REFERENCES publications(url) ON DELETE CASCADE,

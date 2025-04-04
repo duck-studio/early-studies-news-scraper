@@ -87,7 +87,7 @@ export const headlines = sqliteTable(
     headline: text('headline').notNull(),
     snippet: text('snippet'),
     source: text('source').notNull(),
-    publicationDate: text('publication_date'),
+    rawDate: text('raw_date'),
     normalizedDate: text('normalized_date'),
     category: text('category', { enum: headlineCategories }),
     publicationId: text('publication_id')
