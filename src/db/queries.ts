@@ -1,4 +1,4 @@
-import { type InferInsertModel, type InferSelectModel, and, count, desc,  eq, inArray, sql } from 'drizzle-orm';
+import { type InferInsertModel, type InferSelectModel, and, count, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1'; 
 import {headlineCategories, publicationCategories, schema} from './schema';
 
@@ -88,80 +88,84 @@ export async function deleteRegion(db: D1Database, name: string) {
 }
 
 export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
-  // const drizzleDb = drizzle(db, { schema });
-  // const page = filters?.page ?? 1;
-  // const pageSize = filters?.pageSize ?? 10;
-  // const offset = (page - 1) * pageSize;
+  const drizzleDb = drizzle(db, { schema });
+  const page = filters?.page ?? 1;
+  const pageSize = filters?.pageSize ?? 100;
+  const offset = (page - 1) * pageSize;
 
-  // const conditions = [];
-  // if (filters?.startDate) {
-  //   console.warn('Date filtering assumes normalizedDate is directly comparable.');
-  // }
-  // if (filters?.endDate) {
-  //   console.warn('Date filtering assumes normalizedDate is directly comparable.');
-  // }
-  // if (filters?.publicationFilters?.category) {
-  //   conditions.push(eq(publications.category, filters.publicationFilters.category));
-  // }
-  // if (filters?.publicationFilters?.regions && filters.publicationFilters.regions.length > 0) {
-  //   const regionPublications = await drizzleDb
-  //     .selectDistinct({ publicationUrl: publicationRegions.publicationUrl })
-  //     .from(publicationRegions)
-  //     .where(inArray(publicationRegions.regionName, filters.publicationFilters.regions));
-  //   const allowedUrls = regionPublications.map(p => p.publicationUrl) as string[];
-  //   if (allowedUrls.length > 0) {
-  //        conditions.push(inArray(headlines.publicationId, allowedUrls));
-  //   } else {
-  //        conditions.push(inArray(headlines.id, []));
-  //   }
-  // }
-  // if (filters?.categories && filters.categories.length > 0) {
-  //   conditions.push(inArray(headlines.category, filters.categories));
-  // }
+  const conditions = [];
 
-  // const whereCondition = conditions.length > 0 ? and(...conditions) : undefined;
+  if (filters?.startDate) {
+    // Assuming normalizedDate is stored in a format comparable as text (e.g., ISO 8601)
+    conditions.push(gte(schema.headlines.normalizedDate, filters.startDate.toISOString()));
+    console.warn('Date filtering assumes normalizedDate is in a comparable text format (e.g., ISO 8601).');
+  }
+  if (filters?.endDate) {
+    conditions.push(lte(schema.headlines.normalizedDate, filters.endDate.toISOString()));
+     console.warn('Date filtering assumes normalizedDate is in a comparable text format (e.g., ISO 8601).');
+  }
+  if (filters?.publicationFilters?.category) {
+    conditions.push(eq(schema.publications.category, filters.publicationFilters.category));
+  }
+  if (filters?.publicationFilters?.regions && filters.publicationFilters.regions.length > 0) {
+    // Subquery to find publication URLs matching the regions
+    const regionPublicationsSubQuery = drizzleDb
+      .selectDistinct({ publicationUrl: schema.publicationRegions.publicationUrl })
+      .from(schema.publicationRegions)
+      .where(inArray(schema.publicationRegions.regionName, filters.publicationFilters.regions));
+    
+    // Add condition to filter headlines based on the subquery results
+    conditions.push(inArray(schema.headlines.publicationId, regionPublicationsSubQuery));
+  }
+  if (filters?.categories && filters.categories.length > 0) {
+    conditions.push(inArray(schema.headlines.category, filters.categories));
+  }
 
-  // const dataQuery = drizzleDb
-  //   .select({
-  //     headlineId: headlines.id,
-  //     headlineUrl: headlines.url,
-  //     headlineText: headlines.headline,
-  //     snippet: headlines.snippet,
-  //     source: headlines.source,
-  //     rawDate: headlines.rawDate,
-  //     normalizedDate: headlines.normalizedDate,
-  //     category: headlines.category,
-  //     createdAt: headlines.createdAt,
-  //     publicationName: publications.name,
-  //     publicationCategory: publications.category,
-  //   })
-  //   .from(headlines)
-  //   .innerJoin(publications, eq(headlines.publicationId, publications.url))
-  //   .where(whereCondition)
-  //   .orderBy(desc(headlines.normalizedDate))
-  //   .limit(pageSize)
-  //   .offset(offset);
+  const whereCondition = conditions.length > 0 ? and(...conditions) : undefined;
 
-  // const countQuery = drizzleDb
-  //   .select({ total: count() })
-  //   .from(headlines)
-  //   .innerJoin(publications, eq(headlines.publicationId, publications.url))
-  //   .where(whereCondition);
+  // Always join with publications as we select fields from it
+  const dataQuery = drizzleDb
+    .select({
+      headlineId: schema.headlines.id,
+      headlineUrl: schema.headlines.url,
+      headlineText: schema.headlines.headline,
+      snippet: schema.headlines.snippet,
+      source: schema.headlines.source,
+      rawDate: schema.headlines.rawDate,
+      normalizedDate: schema.headlines.normalizedDate,
+      category: schema.headlines.category,
+      createdAt: schema.headlines.createdAt,
+      publicationName: schema.publications.name,
+      publicationCategory: schema.publications.category,
+      publicationUrl: schema.publications.url,
+    })
+    .from(schema.headlines)
+    .innerJoin(schema.publications, eq(schema.headlines.publicationId, schema.publications.url))
+    .where(whereCondition)
+    .orderBy(desc(schema.headlines.normalizedDate)) // Order by date descending
+    .limit(pageSize)
+    .offset(offset);
 
-  // const [results, totalResult] = await Promise.all([
-  //   dataQuery,
-  //   countQuery,
-  // ]);
+  const countQuery = drizzleDb
+    .select({ total: count() })
+    .from(schema.headlines)
+    .innerJoin(schema.publications, eq(schema.headlines.publicationId, schema.publications.url))
+    .where(whereCondition);
 
-  // const total = Number(totalResult[0]?.total ?? 0);
+  const [results, totalResult] = await Promise.all([
+    dataQuery,
+    countQuery,
+  ]);
 
-  // return {
-  //   data: results,
-  //   total: total,
-  //   page,
-  //   pageSize,
-  //   totalPages: Math.ceil(total / pageSize),
-  // };
+  const total = Number(totalResult[0]?.total ?? 0);
+
+  return {
+    data: results,
+    total: total,
+    page,
+    pageSize,
+    totalPages: Math.ceil(total / pageSize),
+  };
 }
 
 export async function upsertHeadline(db: D1Database, data: InsertHeadline) {
