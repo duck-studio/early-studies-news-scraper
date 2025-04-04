@@ -1266,67 +1266,106 @@ export default {
             const fetchResults = await Promise.all(fetchPromises);
             logger.info('Finished fetching headlines.');
 
-            // 4. Process Results and Trigger Workflows
-            let totalFetched = 0;
-            let totalFiltered = 0;
+            // 4. Flatten and Process Results, Trigger Workflows
+            let headlinesFilteredCount = 0;
             let workflowsTriggered = 0;
             let workflowErrors = 0;
             const workflowLimit = pLimit(10); // Limit concurrent workflow creations
             const workflowPromises: Promise<unknown>[] = [];
 
-            for (const result of fetchResults) {
+        
+            // Flatten results and add publicationId
+            const processedHeadlines = fetchResults.flatMap(result => {
+                console.log('result', JSON.stringify(result).substring(0, 200));
                 if (result.error) {
                     logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
-                    continue;
+                    return []; // Skip failed fetches
                 }
+                const urlWithoutProtocol = result.url.replace('https://', '');
+                const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
+                if (!publicationId) {
+                    logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
+                    return []; // Skip if ID mapping failed
+                }
+                // Map each item to include the publicationId and ensure correct field mapping
 
-                totalFetched += result.results.length;
+                const transformedResults = result.results.map(item => ({
+                    url: item.link, // Use link from Serper result
+                    headline: item.title, // Use title from Serper result
+                    snippet: item.snippet ?? null,
+                    source: item.source,
+                    rawDate: item.date ?? null, // Use date from Serper result
+                    normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
+                    category: null, // Category determined later
+                    publicationId, // Add the looked-up publication ID
+                    // Add other relevant fields from 'item' if necessary
+                }));
 
-                for (const item of result.results) {
-                    const publicationId = publicationUrlToIdMap.get(result.url);
-                    if (!publicationId) {
-                         logger.warn(`Could not find publication ID for URL: ${result.url}`);
-                         continue;
-                    }
+                console.log('transformed results', JSON.stringify(transformedResults).substring(0, 200));
+                return transformedResults;
+            });
 
-                    const parsedDate = parseSerperDate(item.date);
-                    if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
-                         totalFiltered++;
-                         // Construct complete params for the workflow
-                         const workflowParams: ProcessNewsItemParams = {
-                             headlineUrl: item.link,
-                             publicationId: publicationId,
-                             headlineText: item.title,
-                             snippet: item.snippet ?? null,
-                             source: item.source,
-                             rawDate: item.date ?? null,
-                             normalizedDate: parsedDate ? parsedDate.toLocaleDateString('en-GB') : null
-                         };
+            console.log('processed headlines', JSON.stringify(processedHeadlines).substring(0, 200));
 
-                         workflowPromises.push(
-                            workflowLimit(async () => {
-                                try {
-                                    const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
-                                         params: workflowParams // Pass full params
-                                    });
-                                    logger.debug(`Triggered workflow ${instance.id} for headline: ${item.link}`);
-                                    workflowsTriggered++;
-                                } catch (wfError) {
-                                    logger.error(`Failed to trigger workflow for headline: ${item.link}`, { error: wfError });
-                                    workflowErrors++;
-                                }
-                            })
-                        );
-                    } 
+            const totalFetched = processedHeadlines.length;
+            logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
+
+
+            // Iterate over the flattened and augmented headlines
+            for (const item of processedHeadlines) {
+                const parsedDate = parseSerperDate(item.rawDate);
+
+                // Filter by date range
+                if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
+                    headlinesFilteredCount++;
+
+                    // Construct complete params for the workflow using ProcessableHeadline fields
+                    const workflowParams: ProcessNewsItemParams = {
+                        headlineUrl: item.url, // Use item.url which comes from item.link
+                        publicationId: item.publicationId, // Already included
+                        headlineText: item.headline, // Use item.headline which comes from item.title
+                        snippet: item.snippet ?? null,
+                        source: item.source,
+                        rawDate: item.rawDate ?? null,
+                        normalizedDate: item.normalizedDate // Already calculated
+                    };
+
+                    workflowPromises.push(
+                        workflowLimit(async () => {
+                            try {
+                                const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({
+                                    params: workflowParams // Pass full params
+                                });
+                                logger.debug(`Triggered workflow ${instance.id} for headline: ${item.url}`);
+                                workflowsTriggered++;
+                            } catch (wfError) {
+                                logger.error(`Failed to trigger workflow for headline: ${item.url}`, { error: wfError });
+                                workflowErrors++;
+                            }
+                        })
+                    );
+                } else if (parsedDate) {
+                     logger.debug({
+                        headline: item.headline,
+                        rawDate: item.rawDate,
+                        parsedDate: parsedDate.toISOString(),
+                        rangeStart: dateRange.start.toISOString(),
+                        rangeEnd: dateRange.end.toISOString(),
+                    }, 'Scheduled fetch: Filtering result outside date range');
+                } else {
+                     logger.debug({
+                        headline: item.headline,
+                        rawDate: item.rawDate
+                    }, 'Scheduled fetch: Filtering result, could not parse date');
                 }
             }
 
             await Promise.allSettled(workflowPromises);
 
             logger.info('Scheduled task finished.', {
-                publicationsFetched: fetchResults.length,
-                headlinesFetchedTotal: totalFetched,
-                headlinesWithinDateRange: totalFiltered,
+                publicationsFetched: fetchResults.filter(r => !r.error).length, // Count only successful fetches
+                totalHeadlinesFetched: totalFetched,
+                headlinesWithinDateRange: headlinesFilteredCount,
                 workflowsTriggered,
                 workflowErrors
             });
