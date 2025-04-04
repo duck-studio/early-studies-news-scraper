@@ -18,10 +18,8 @@
     "db:migrate": "npx wrangler d1 migrations apply early-studies-d1-database --remote",
     "db:migrate:local": "npx wrangler d1 migrations apply early-studies-d1-database",
     "db:studio": "drizzle-kit studio --config=./src/db/drizzle.config.ts",
-    "db:seed": "tsx src/db/seed.ts",
-    "db:seed:local": "tsx src/db/seed.ts",
-    "db:seed:generate-sql": "tsx src/db/seed.ts --remote > ./seed.sql",
-    "db:seed:remote": "pnpm run db:seed:generate-sql && wrangler d1 execute compromised-game-d1-database --remote --file ./seed.sql && rm ./seed.sql"
+    "db:seed": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql --remote",
+    "db:seed:local": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql"
   },
   "keywords": [],
   "author": "",

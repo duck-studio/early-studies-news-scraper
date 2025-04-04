@@ -91,7 +91,7 @@ VALUES
   ('vice.com', 'Vice', 'digital');
 
 -- Seed Publication Regions (Link publications to regions)
-INSERT OR IGNORE INTO publication_regions (publicationUrl, regionName)
+INSERT OR IGNORE INTO publication_regions (publication_url, region_name)
 VALUES
   ('bbc.co.uk', 'UK'),
   ('bbc.com', 'US'),
