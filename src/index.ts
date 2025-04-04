@@ -1,3 +1,4 @@
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { apiReference } from '@scalar/hono-api-reference';
 import { isWithinInterval, parse as parseDate } from 'date-fns';
 import { type Context, Hono, type Next } from 'hono';
@@ -6,6 +7,8 @@ import { resolver, validator as zValidator } from 'hono-openapi/zod';
 import { HTTPException } from 'hono/http-exception';
 import { type StatusCode } from 'hono/utils/http-status';
 import pLimit from 'p-limit';
+
+import { generateObject } from 'ai';
 import type { Logger } from 'pino';
 import { ZodError, z } from 'zod';
 import {
@@ -64,6 +67,20 @@ import {
 import type { DateRangeEnum, FetchAllPagesResult, FetchResult } from './schema';
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate, validateToken } from './utils';
 import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+
+// Bindings defined in wrangler.toml
+type Env = {
+  DB: D1Database;
+  SERPER_API_KEY: string;
+  BEARER_TOKEN: string;
+  PROCESS_NEWS_ITEM_WORKFLOW: Workflow;
+  AI: Ai;
+
+  // Environment variables sometimes expected by type definitions
+  NODE_ENV: string;
+  LOG_LEVEL: string;
+  GOOGLE_AI_STUDIO_API_KEY: string; 
+};
 
 type Variables = {
   requestId: string;
@@ -1571,61 +1588,113 @@ type ProcessNewsItemParams = {
   // category will be assigned later by AI step
 };
 
+// Zod schema for the expected AI output (Removed .openapi() for AI usage)
+const HeadlineCategorySchema = z.object({
+  category: z.enum(headlineCategories).nullable()
+    .describe("The determined headline category, or null if none clearly apply.")
+});
+
 // Define the Workflow class (params type already updated)
 export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
     const { headlineUrl, publicationId, headlineText, snippet, source, rawDate, normalizedDate } = event.payload;
-    console.log("Starting ProcessNewsItemWorkflow for:", headlineUrl, "PubID:", publicationId);
+    const workflowLogger = {
+        log: (message: string, data?: object) => console.log(`[WF] ${message}`, data ? JSON.stringify(data) : ''),
+        warn: (message: string, data?: object) => console.warn(`[WF] WARN: ${message}`, data ? JSON.stringify(data) : ''),
+        error: (message: string, data?: object) => console.error(`[WF] ERROR: ${message}`, data ? JSON.stringify(data) : ''),
+    }
+    workflowLogger.log("Starting ProcessNewsItemWorkflow", { headlineUrl, publicationId });
 
     // --- Step 1: Check if headline exists --- 
     const existingHeadline = await step.do('check database for existing record', async () => {
-      console.log('Checking database for URL:', headlineUrl);
+      workflowLogger.log('Checking database for URL', { headlineUrl });
       if (!this.env.DB) {
-        console.error('Workflow Error: DB binding missing.');
+        workflowLogger.error('Workflow Error: DB binding missing.');
         throw new Error('Database binding (DB) is not configured for the workflow environment.');
       }
       try {
         const record = await getHeadlineByUrl(this.env.DB, headlineUrl);
-        // Return only necessary info or the full record if needed for update
+        workflowLogger.log('Database check result', { exists: !!record });
         return record ? { exists: true, id: record.id } : { exists: false }; 
       } catch (dbError) {
-        console.error('Workflow Step Error: Failed to query database', { headlineUrl, dbError });
-        // Throw error to force workflow step retry according to workflow's retry policy
+        workflowLogger.error('Workflow Step Error: Failed to query database', { headlineUrl, dbError });
         throw dbError; 
       }
     });
 
     // --- Step 2: Decide Path (Update or Create) --- 
     if (existingHeadline.exists) {
-      console.log('Record already exists, proceeding to update. ID:', existingHeadline.id, 'URL:', headlineUrl);
-      // --- Step 2a: Update Existing Record (Placeholder for now) --- 
-      await step.do('update existing record', async () => {
-         console.log('Placeholder: Update logic for existing headline ID:', existingHeadline.id);
-         // TODO: Implement update logic using updateHeadlineById if needed
-         // const updateData = { ... determine fields to update ... };
-         // await updateHeadlineById(this.env.DB, existingHeadline.id, updateData);
-         return { updated: true }; // Indicate success
-      });
-      console.log("Workflow finished: Updated existing record for", headlineUrl);
+      workflowLogger.log('Record already exists, skipping further processing.', { id: existingHeadline.id, url: headlineUrl });
+      // Optional: Add update logic here if needed in the future
+      // await step.do('update existing record', async () => { ... });
       return; // End workflow execution
     }
 
-    // --- Step 3: Analyze New Headline (Placeholder AI) --- 
-    console.log('Headline does not exist, proceeding to analyze and create.', headlineUrl);
+    // --- Step 3: Analyze New Headline with AI --- 
+    workflowLogger.log('Headline does not exist, proceeding to analyze.', { headlineUrl });
     const analysisResult = await step.do('analyze and categorize headline', async () => {
-      console.log('Placeholder: AI analysis for headline:', headlineText);
-      // TODO: Replace with actual AI call (e.g., Workers AI)
-      // const aiCategory = await callWorkersAI(this.env.AI, headlineText);
-      const staticCategory = 'technology'; // Placeholder category
-      return { category: staticCategory }; 
+       workflowLogger.log('Starting AI analysis for headline', { headlineText });
+
+      if (!this.env.AI) {
+        workflowLogger.error('Workflow Error: AI binding missing.');
+        throw new Error('AI binding is not configured for the workflow environment.');
+      }
+
+      const allowedCategories = headlineCategories.join(', ');
+      const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the following schema: { "category": "<chosen_category>" | null }.`;
+      const userPrompt = `Headline: "${headlineText}"\nSnippet: "${snippet || 'N/A'}"\n\nCategorize this headline.`;
+      
+      // Pass the Zod schema object directly 
+      const responseSchemaForAI = HeadlineCategorySchema;
+      // Remove the check for responseSchema as it's the Zod object itself
+
+      try {
+        const google = createGoogleGenerativeAI({
+          apiKey: this.env.GOOGLE_AI_STUDIO_API_KEY
+          
+        })
+        const model = google('gemini-2.0-flash-001',{
+          safetySettings: [
+            { category: 'HARM_CATEGORY_UNSPECIFIED', threshold: 'BLOCK_LOW_AND_ABOVE' },
+          ],
+        });
+
+        const aiResponse = await generateObject({
+model,
+schema: responseSchemaForAI,
+system: systemPrompt,
+prompt: userPrompt,
+        })
+       
+
+        workflowLogger.log('Raw AI Response', { response: aiResponse });
+
+        // Validate the AI response structure and category using the same Zod schema
+        const validated = HeadlineCategorySchema.safeParse(aiResponse);
+
+        if (!validated.success) {
+             workflowLogger.error('AI response validation failed', { errors: validated.error.flatten(), rawResponse: aiResponse });
+             return { category: 'other' as const }; 
+        }
+        
+        const category = validated.data.category ?? 'other';
+        
+        workflowLogger.log('AI analysis successful', { category });
+        return { category };
+
+      } catch (aiError) {
+         workflowLogger.error('AI execution failed', { headlineText, aiError });
+         throw aiError;
+      }
     });
-    const headlineCategory = analysisResult.category as (typeof headlineCategories)[number] | null;
+
+    const headlineCategory = analysisResult.category;
 
     // --- Step 4: Store New Headline in DB --- 
     await step.do('store new headline in db', async () => {
-      console.log('Attempting to store new headline:', headlineUrl);
+      workflowLogger.log('Attempting to store new headline', { headlineUrl, category: headlineCategory });
       if (!this.env.DB) {
-         console.error('Workflow Error: DB binding missing for insert.');
+         workflowLogger.error('Workflow Error: DB binding missing for insert.');
          throw new Error('Database binding (DB) is not configured for the workflow environment.');
       }
       const headlineData: Omit<InsertHeadline, 'id'> = {
@@ -1635,27 +1704,24 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
           source: source,
           rawDate: rawDate,
           normalizedDate: normalizedDate,
-          category: headlineCategory,
+          category: headlineCategory, 
           publicationId: publicationId,
       };
       try {
          await insertHeadline(this.env.DB, headlineData);
-         console.log('Successfully inserted new headline:', headlineUrl);
-         return { inserted: true }; // Indicate success
+         workflowLogger.log('Successfully inserted new headline', { headlineUrl });
+         return { inserted: true };
       } catch (dbError) {
-          // Check if it's the specific "already exists" error
           if (dbError instanceof Error && dbError.name === 'DatabaseError' && dbError.message.includes('already exists')) {
-             console.warn(`Workflow Step Warning: Headline likely inserted concurrently. URL: ${headlineUrl}`, { dbErrorDetails: (dbError as DatabaseError).details });
-             // Don't re-throw; consider this path successful as the record exists.
+             workflowLogger.warn(`Headline likely inserted concurrently. URL: ${headlineUrl}`, { dbErrorDetails: (dbError as DatabaseError).details });
              return { inserted: false, concurrent: true }; 
           }
-          // If it wasn't the "already exists" error, log and re-throw to trigger retry
-          console.error('Workflow Step Error: Failed to insert headline', { headlineData, dbError });
+          workflowLogger.error('Workflow Step Error: Failed to insert headline', { headlineData, dbError });
           throw dbError;
       }
     });
 
-    console.log("Finished ProcessNewsItemWorkflow: Created new record for", headlineUrl);
+    workflowLogger.log("Finished ProcessNewsItemWorkflow: Created new record", { headlineUrl });
   }
 }
 

@@ -30,6 +30,11 @@
       "class_name": "ProcessNewsItemWorkflow"
     }
   ],
+  "ai": 
+    {
+      "binding": "AI"
+    }
+  ,
   "triggers": {
     "crons": ["0 0 * * *"]
   }
