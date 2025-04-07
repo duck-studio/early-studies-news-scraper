@@ -15,6 +15,13 @@
       "when": 1743763912500,
       "tag": "0001_safe_ravenous",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1744050471178,
+      "tag": "0002_reflective_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

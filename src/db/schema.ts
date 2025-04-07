@@ -1,123 +1,130 @@
-import { relations, sql } from 'drizzle-orm';
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { nanoid } from 'nanoid';
+import { relations, sql } from "drizzle-orm";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+import { nanoid } from "nanoid";
 
 export const publicationCategories = [
-  'broadcaster',
-  'broadsheet',
-  'tabloid',
-  'digital',
-  'financial',
-  'magazinePeriodical',
-  'newsAgency',
-  'other',
+  "broadcaster",
+  "broadsheet",
+  "tabloid",
+  "digital",
+  "financial",
+  "magazinePeriodical",
+  "newsAgency",
+  "other",
 ] as const;
 
 export const headlineCategories = [
-  'breakingNews',
-  'politics',
-  'world',
-  'business',
-  'technology',
-  'science',
-  'health',
-  'sports',
-  'entertainment',
-  'lifestyle',
-  'environment',
-  'crime',
-  'education',
-  'artsCulture',
-  'opinion',
-  'other',
+  "breakingNews",
+  "politics",
+  "world",
+  "business",
+  "technology",
+  "science",
+  "health",
+  "sports",
+  "entertainment",
+  "lifestyle",
+  "environment",
+  "crime",
+  "education",
+  "artsCulture",
+  "opinion",
+  "other",
 ] as const;
 
 export const publications = sqliteTable(
-  'publications',
+  "publications",
   {
-    id: text('id')
+    id: text("id")
       .primaryKey()
       .$defaultFn(() => nanoid(8)),
-    name: text('name').notNull(),
-    url: text('url').notNull(),
-    category: text('category', { enum: publicationCategories }),
-    createdAt: integer('created_at', { mode: 'timestamp' })
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    category: text("category", { enum: publicationCategories }),
+    createdAt: integer("created_at", { mode: "timestamp" })
       .default(sql`(strftime('%s', 'now'))`)
       .notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
+    updatedAt: integer("updated_at", { mode: "timestamp" })
       .default(sql`(strftime('%s', 'now'))`)
       .$onUpdate(() => sql`(strftime('%s', 'now'))`),
   },
   (table) => ({
-    urlIdx: uniqueIndex('publications_url_idx').on(table.url),
-    categoryIdx: index('publications_category_idx').on(table.category),
+    urlIdx: uniqueIndex("publications_url_idx").on(table.url),
+    categoryIdx: index("publications_category_idx").on(table.category),
   })
 );
 
 export const regions = sqliteTable(
-  'regions',
+  "regions",
   {
-    id: text('id')
+    id: text("id")
       .primaryKey()
       .$defaultFn(() => nanoid(8)),
-    name: text('name').notNull(),
+    name: text("name").notNull(),
   },
   (table) => ({
-    nameIdx: uniqueIndex('regions_name_idx').on(table.name),
+    nameIdx: uniqueIndex("regions_name_idx").on(table.name),
   })
 );
 
 export const publicationRegions = sqliteTable(
-  'publication_regions',
+  "publication_regions",
   {
-    publicationId: text('publication_id')
+    publicationId: text("publication_id")
       .notNull()
-      .references(() => publications.id, { onDelete: 'cascade' }),
-    regionId: text('region_id')
+      .references(() => publications.id, { onDelete: "cascade" }),
+    regionId: text("region_id")
       .notNull()
-      .references(() => regions.id, { onDelete: 'cascade' }),
+      .references(() => regions.id, { onDelete: "cascade" }),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.publicationId, table.regionId] }),
-    publicationIdIdx: index('pub_regions_pub_id_idx').on(table.publicationId),
-    regionIdIdx: index('pub_regions_region_id_idx').on(table.regionId),
+    publicationIdIdx: index("pub_regions_pub_id_idx").on(table.publicationId),
+    regionIdIdx: index("pub_regions_region_id_idx").on(table.regionId),
   })
 );
 
 export const headlines = sqliteTable(
-  'headlines',
+  "headlines",
   {
-    id: text('id')
+    id: text("id")
       .primaryKey()
       .$defaultFn(() => nanoid(8)),
-    url: text('url').notNull().unique(),
-    headline: text('headline').notNull(),
-    snippet: text('snippet'),
-    source: text('source').notNull(),
-    rawDate: text('raw_date'),
-    normalizedDate: text('normalized_date'),
-    category: text('category', { enum: headlineCategories }),
-    publicationId: text('publication_id')
+    url: text("url").notNull().unique(),
+    headline: text("headline").notNull(),
+    snippet: text("snippet"),
+    source: text("source").notNull(),
+    rawDate: text("raw_date"),
+    normalizedDate: text("normalized_date"),
+    category: text("category", { enum: headlineCategories }),
+    publicationId: text("publication_id")
       .notNull()
-      .references(() => publications.id, { onDelete: 'cascade' }),
-    createdAt: integer('created_at', { mode: 'timestamp' })
+      .references(() => publications.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
       .default(sql`(strftime('%s', 'now'))`)
       .notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
+    updatedAt: integer("updated_at", { mode: "timestamp" })
       .default(sql`(strftime('%s', 'now'))`)
       .$onUpdate(() => sql`(strftime('%s', 'now'))`),
   },
   (table) => [
-    index('headlines_publication_id_idx').on(table.publicationId),
-    index('headlines_normalized_date_idx').on(table.normalizedDate),
-    index('headlines_headline_idx').on(table.headline),
-    index('headlines_headline_date_idx').on(table.headline, table.normalizedDate),
-    index('headlines_url_idx').on(table.url),
-    index('headlines_category_idx').on(table.category),
+    index("headlines_publication_id_idx").on(table.publicationId),
+    index("headlines_normalized_date_idx").on(table.normalizedDate),
+    index("headlines_headline_idx").on(table.headline),
+    index("headlines_headline_date_idx").on(table.headline, table.normalizedDate),
+    index("headlines_url_idx").on(table.url),
+    index("headlines_category_idx").on(table.category),
   ]
 );
 
-// --- RELATIONS --- 
+// --- RELATIONS ---
 
 export const publicationRelations = relations(publications, ({ many }) => ({
   publicationRegions: many(publicationRegions),
@@ -148,44 +155,40 @@ export const headlineRelations = relations(headlines, ({ one }) => ({
 
 // --- Sync Runs Table ---
 
-export const syncRunTriggerTypes = ['manual', 'scheduled'] as const;
-export const syncRunStatuses = ['started', 'completed', 'failed'] as const;
+export const syncRunTriggerTypes = ["manual", "scheduled"] as const;
+export const syncRunStatuses = ["started", "completed", "failed"] as const;
 
 export const syncRuns = sqliteTable(
-  'sync_runs',
+  "sync_runs",
   {
-    id: text('id')
+    id: text("id")
       .primaryKey()
       .$defaultFn(() => nanoid(10)), // Slightly longer ID for runs
-    triggerType: text('trigger_type', { enum: syncRunTriggerTypes })
-      .notNull(),
-    status: text('status', { enum: syncRunStatuses })
-      .notNull()
-      .default('started'),
-    startedAt: integer('started_at', { mode: 'timestamp' })
+    triggerType: text("trigger_type", { enum: syncRunTriggerTypes }).notNull(),
+    status: text("status", { enum: syncRunStatuses }).notNull().default("started"),
+    startedAt: integer("started_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(strftime('%s', 'now'))`),
-    finishedAt: integer('finished_at', { mode: 'timestamp' }), // Nullable until finished
-    
+    finishedAt: integer("finished_at", { mode: "timestamp" }), // Nullable until finished
+
     // Input Parameters
-    dateRangeOption: text('date_range_option'), // Store the string enum value
-    customTbs: text('custom_tbs'),
-    maxQueriesPerPublication: integer('max_queries_per_publication'),
+    dateRangeOption: text("date_range_option"), // Store the string enum value
+    customTbs: text("custom_tbs"),
+    maxQueriesPerPublication: integer("max_queries_per_publication"),
 
     // Summary Results (nullable until completed)
-    summaryPublicationsFetched: integer('summary_publications_fetched'),
-    summaryTotalHeadlinesFetched: integer('summary_total_headlines_fetched'),
-    summaryHeadlinesWithinRange: integer('summary_headlines_within_range'),
-    summaryWorkflowsTriggered: integer('summary_workflows_triggered'),
-    summaryWorkflowErrors: integer('summary_workflow_errors'),
-    
+    summaryPublicationsFetched: integer("summary_publications_fetched"),
+    summaryTotalHeadlinesFetched: integer("summary_total_headlines_fetched"),
+    summaryHeadlinesWithinRange: integer("summary_headlines_within_range"),
+    summaryWorkflowsQueued: integer("summary_workflows_triggered"),
+
     // Error Details (nullable)
-    errorMessage: text('error_message'),
+    errorMessage: text("error_message"),
   },
   (table) => ({
-    startedAtIdx: index('sync_runs_started_at_idx').on(table.startedAt),
-    statusIdx: index('sync_runs_status_idx').on(table.status),
-    triggerTypeIdx: index('sync_runs_trigger_type_idx').on(table.triggerType),
+    startedAtIdx: index("sync_runs_started_at_idx").on(table.startedAt),
+    statusIdx: index("sync_runs_status_idx").on(table.status),
+    triggerTypeIdx: index("sync_runs_trigger_type_idx").on(table.triggerType),
   })
 );
 
