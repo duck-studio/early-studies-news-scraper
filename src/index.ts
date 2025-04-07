@@ -1,4 +1,5 @@
 import { apiReference } from '@scalar/hono-api-reference';
+import { generateObject } from 'ai';
 import { isWithinInterval} from 'date-fns';
 import { type Context, Hono, type Next } from 'hono';
 import { describeRoute, openAPISpecs } from 'hono-openapi';
@@ -6,10 +7,8 @@ import { resolver, validator as zValidator } from 'hono-openapi/zod';
 import { HTTPException } from 'hono/http-exception';
 import { type StatusCode } from 'hono/utils/http-status';
 import pLimit from 'p-limit';
-import { createWorkersAI } from 'workers-ai-provider';
-
-import { generateObject } from 'ai';
 import type { Logger } from 'pino';
+import { createWorkersAI } from 'workers-ai-provider';
 import { ZodError, z } from 'zod';
 import {
   type DatabaseError,
@@ -67,20 +66,6 @@ import {
 import type { DateRangeEnum, FetchAllPagesResult, FetchResult } from './schema';
 import { getDateRange, getGeoParams, getTbsString, parseDdMmYyyy, parseSerperDate, validateToken } from './utils';
 import { WorkflowEntrypoint, WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-
-// Bindings defined in wrangler.toml
-type Env = {
-  DB: D1Database;
-  SERPER_API_KEY: string;
-  BEARER_TOKEN: string;
-  PROCESS_NEWS_ITEM_WORKFLOW: Workflow;
-  AI: Ai;
-
-  // Environment variables sometimes expected by type definitions
-  NODE_ENV: string;
-  LOG_LEVEL: string;
-  GOOGLE_AI_STUDIO_API_KEY: string; 
-};
 
 type Variables = {
   requestId: string;
@@ -1254,9 +1239,6 @@ async function performHeadlineSync(
 ): Promise<SyncSummary> {
     logger.info("Starting headline sync...", { triggerType, dateRangeOption, maxQueriesPerPublication, targetRPS });
 
-    // Removed unused minDelayMs
-    // const minDelayMs = 1000 / targetRPS; 
-
     // --- Create Sync Run Record ---
     let syncRunId: string | undefined;
     try {
@@ -1270,7 +1252,7 @@ async function performHeadlineSync(
       logger.info(`Created sync run record: ${syncRunId}`);
     } catch (dbError) {
        logger.error('Failed to create initial sync run record. Aborting sync.', { dbError });
-       throw new Error('Failed to initialize sync run logging.'); 
+       throw new Error('Failed to initialize sync run logging.');
     }
 
     let summary: SyncSummary | undefined;
@@ -1279,11 +1261,12 @@ async function performHeadlineSync(
          if (!env.SERPER_API_KEY) {
            throw new Error('Server configuration error: SERPER_API_KEY missing.');
          }
-         if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
-           throw new Error('Server configuration error: PROCESS_NEWS_ITEM_WORKFLOW binding missing.');
+         // Check for Queue binding
+         if (!env.NEWS_ITEM_QUEUE) {
+           throw new Error('Server configuration error: NEWS_ITEM_QUEUE binding missing.');
          }
 
-         // --- Main Sync Logic --- 
+         // --- Main Sync Logic ---
           // 1. Get Publication URLs and IDs
             const publications = await getPublications(env.DB);
             if (!publications || publications.length === 0) {
@@ -1292,12 +1275,12 @@ async function performHeadlineSync(
                     publicationsFetched: 0,
                     totalHeadlinesFetched: 0,
                     headlinesWithinDateRange: 0,
-                    workflowsTriggered: 0,
-                    workflowErrors: 0,
+                    workflowsTriggered: 0, // Still represents messages sent
+                    workflowErrors: 0,     // Still represents send errors
                     dateRange: { start: new Date(0).toISOString(), end: new Date(0).toISOString() }
                 };
-                 await updateSyncRun(env.DB, syncRunId, { 
-                    status: 'completed', 
+                 await updateSyncRun(env.DB, syncRunId, {
+                    status: 'completed',
                     summaryPublicationsFetched: 0,
                     summaryTotalHeadlinesFetched: 0,
                     summaryHeadlinesWithinRange: 0,
@@ -1309,7 +1292,7 @@ async function performHeadlineSync(
             }
             const publicationUrlToIdMap = new Map<string, string>();
             for (const pub of publications) {
-                if (pub.id && pub.url) { 
+                if (pub.id && pub.url) {
                     publicationUrlToIdMap.set(pub.url, pub.id);
                 }
             }
@@ -1338,27 +1321,27 @@ async function performHeadlineSync(
             logger.info('Finished fetching headlines.');
 
             let headlinesFilteredCount = 0;
-            let workflowsTriggered = 0;
-            let workflowErrors = 0;
-            // Reduce concurrency significantly to space out AI calls within workflows
-            const workflowLimit = pLimit(2); 
-            const workflowPromises: Promise<unknown>[] = [];
+            let messagesSent = 0;
+            let messageSendErrors = 0;
+            const queueSendLimit = pLimit(10);
+            const queueSendPromises: Promise<unknown>[] = [];
+            let messageDelaySeconds = 0;
 
             const processedHeadlines = fetchResults.flatMap(result => {
                  logger.debug({ url: result.url, hasError: !!result.error }, 'Processing fetch result');
                 if (result.error) {
                     logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
-                    return []; 
+                    return [];
                 }
                 const urlWithoutProtocol = result.url.replace('https://', '');
                 const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
                 if (!publicationId) {
                     logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
-                    return []; 
+                    return [];
                 }
                 const transformedResults = result.results.map(item => ({
                     url: item.link,
-                    headline: item.title, 
+                    headline: item.title,
                     snippet: item.snippet ?? null,
                     source: item.source,
                     rawDate: item.date ?? null,
@@ -1377,7 +1360,7 @@ async function performHeadlineSync(
                 const parsedDate = parseSerperDate(item.rawDate);
                 if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
                     headlinesFilteredCount++;
-                    const workflowParams: ProcessNewsItemParams = {
+                    const messagePayload: ProcessNewsItemParams = {
                         headlineUrl: item.url,
                         publicationId: item.publicationId,
                         headlineText: item.headline,
@@ -1386,15 +1369,21 @@ async function performHeadlineSync(
                         rawDate: item.rawDate,
                         normalizedDate: item.normalizedDate
                     };
-                    workflowPromises.push(
-                        workflowLimit(async () => {
+
+                    if (messagesSent > 0 && messagesSent % 10 === 0) {
+                        messageDelaySeconds++;
+                        logger.debug(`Increased message delay to ${messageDelaySeconds} seconds.`);
+                    }
+
+                    queueSendPromises.push(
+                        queueSendLimit(async () => {
                             try {
-                                const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({ params: workflowParams });
-                                logger.debug(`Triggered workflow ${instance.id} for headline: ${item.url}`);
-                                workflowsTriggered++;
-                            } catch (wfError) {
-                                logger.error(`Failed to trigger workflow for headline: ${item.url}`, { error: wfError });
-                                workflowErrors++;
+                                await env.NEWS_ITEM_QUEUE.send(messagePayload, { delaySeconds: messageDelaySeconds });
+                                logger.debug(`Sent message to queue for headline: ${item.url} with delay ${messageDelaySeconds}s`);
+                                messagesSent++;
+                            } catch (queueError) {
+                                logger.error(`Failed to send message to queue for headline: ${item.url}`, { error: queueError });
+                                messageSendErrors++;
                             }
                         })
                     );
@@ -1404,15 +1393,15 @@ async function performHeadlineSync(
                      logger.debug({ headline: item.headline, rawDate: item.rawDate }, 'Sync: Filtering result, could not parse date');
                 }
             }
-            await Promise.allSettled(workflowPromises);
-            
-         // --- Final Summary Calculation --- 
+            await Promise.allSettled(queueSendPromises);
+
+         // --- Final Summary Calculation ---
          summary = {
             publicationsFetched: fetchResults.filter(r => !r.error).length,
             totalHeadlinesFetched: totalFetched,
             headlinesWithinDateRange: headlinesFilteredCount,
-            workflowsTriggered,
-            workflowErrors,
+            workflowsTriggered: messagesSent,
+            workflowErrors: messageSendErrors,
             dateRange: { start: dateRange.start.toISOString(), end: dateRange.end.toISOString() },
          };
 
@@ -1433,36 +1422,24 @@ async function performHeadlineSync(
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error('Error during sync task execution:', { syncRunId, error });
 
-        // Attempt to update Sync Run Record to Failed status
         if (syncRunId) {
             try {
-                 // Define the update payload ensuring required fields are present
                  const updatePayload: UpdateSyncRunData = {
                     status: 'failed',
                     errorMessage: errorMessage,
-                    // Add summary fields only if the summary object exists
-                    ...(summary && {
-                        summaryPublicationsFetched: summary.publicationsFetched,
-                        summaryTotalHeadlinesFetched: summary.totalHeadlinesFetched,
-                        summaryHeadlinesWithinRange: summary.headlinesWithinDateRange,
-                        summaryWorkflowsTriggered: summary.workflowsTriggered,
-                        summaryWorkflowErrors: summary.workflowErrors,
-                    }),
-                    // Ensure other optional fields are explicitly undefined or null if not available
                     summaryPublicationsFetched: summary?.publicationsFetched ?? null,
                     summaryTotalHeadlinesFetched: summary?.totalHeadlinesFetched ?? null,
                     summaryHeadlinesWithinRange: summary?.headlinesWithinDateRange ?? null,
                     summaryWorkflowsTriggered: summary?.workflowsTriggered ?? null,
                     summaryWorkflowErrors: summary?.workflowErrors ?? null,
                  };
-                 
+
                 await updateSyncRun(env.DB, syncRunId, updatePayload);
                  logger.info('Updated sync run record to failed status.', { syncRunId });
             } catch (updateError) {
                 logger.error('Failed to update sync run record to failed status.', { syncRunId, updateError });
             }
         }
-        // Re-throw the original error that caused the failure
         throw error;
     }
 }
@@ -1574,45 +1551,84 @@ app.get(
   }
 );
 
+// --- Export including scheduled and queue handlers ---
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     const logger = createLogger(env);
     logger.info(`Cron Trigger Fired: ${new Date(event.scheduledTime).toISOString()}`);
-
-    // Define default RPS for scheduled runs
     const scheduledRps = 8.33;
 
     ctx.waitUntil((async () => {
         try {
-            // Pass 'scheduled' as the trigger type and default RPS
             await performHeadlineSync(
                 env,
                 logger,
                 'scheduled',
-                'Past 24 Hours', // Default date range for scheduled runs
-                undefined,        // No custom TBS for scheduled runs
-                5,                // Default max queries for scheduled runs
-                scheduledRps      // Pass the variable here
+                'Past 24 Hours',
+                undefined,
+                5,
+                scheduledRps
             );
         } catch (error) {
             logger.error('Scheduled headline sync failed.', { error });
-            // Error is already logged and run record updated within performHeadlineSync
         }
     })());
+  },
+
+  // --- Reinstate Queue Consumer Handler (using Workflow Binding) ---
+  async queue(batch: MessageBatch<ProcessNewsItemParams>, env: Env, _ctx: ExecutionContext): Promise<void> {
+      const logger = createLogger(env);
+      logger.info(`Queue handler started processing batch of size ${batch.messages.length}`);
+
+      // Check for necessary bindings
+      if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
+          logger.error("Queue Handler Error: PROCESS_NEWS_ITEM_WORKFLOW binding missing. Cannot process batch.");
+          batch.retryAll();
+          return;
+      }
+      // We assume the workflow itself has access to its needed bindings (DB, AI) via the runtime
+
+      const promises = batch.messages.map(async (message) => {
+          const messageId = message.id;
+          const messageBody = message.body;
+          logger.info(`Processing message ${messageId}`, { headlineUrl: messageBody.headlineUrl });
+
+          try {
+              // Create a new workflow instance for this message
+              const instance = await env.PROCESS_NEWS_ITEM_WORKFLOW.create({ params: messageBody });
+              logger.info(`Successfully triggered workflow instance ${instance.id} for message ${messageId}`);
+
+              // Note: We don't await the workflow completion here.
+              // The queue message is acknowledged once the workflow is successfully triggered.
+              // Workflow success/failure is handled internally by the workflow and its steps.
+              message.ack();
+
+          } catch (error) {
+              logger.error(`Error triggering workflow for message ${messageId}:`, { error });
+              // Decide whether to retry based on the error.
+              // Retrying might be suitable for transient issues creating the workflow instance.
+              // If the error is persistent (e.g., invalid params), retrying won't help.
+              // For now, let's retry on any error during creation.
+              message.retry();
+          }
+      });
+
+      // Wait for all workflow triggering promises to settle
+      await Promise.allSettled(promises);
+      logger.info(`Queue handler finished processing batch of size ${batch.messages.length}`);
   }
 };
 
-// Define the Workflow parameters - include necessary fields for insertion
+// Define the Workflow parameters
 type ProcessNewsItemParams = {
   headlineUrl: string;
   publicationId: string;
-  headlineText: string; 
+  headlineText: string;
   snippet: string | null;
   source: string;
   rawDate: string | null;
   normalizedDate: string | null;
-  // category will be assigned later by AI step
 };
 
 // Zod schema for the expected AI output
@@ -1621,91 +1637,101 @@ const HeadlineCategorySchema = z.object({
     .describe("The determined headline category, or null if none clearly apply.")
 });
 
-// Define the Workflow class (params type already updated)
+// Define the Workflow class (reverted to original structure)
 export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
-    // Ensure all needed params are destructured
+    // `this.env` is automatically populated by the runtime
     const { headlineUrl, publicationId, headlineText, snippet, source, rawDate, normalizedDate } = event.payload;
     const workflowLogger = {
-        log: (message: string, data?: object) => console.log(`[WF] ${message}`, data ? JSON.stringify(data) : ''),
-        warn: (message: string, data?: object) => console.warn(`[WF] WARN: ${message}`, data ? JSON.stringify(data) : ''),
-        error: (message: string, data?: object) => console.error(`[WF] ERROR: ${message}`, data ? JSON.stringify(data) : ''),
+        log: (message: string, data?: object) => console.log(`[WF ${event.instanceId ?? 'N/A'}] ${message}`, data ? JSON.stringify(data) : ''),
+        warn: (message: string, data?: object) => console.warn(`[WF ${event.instanceId ?? 'N/A'}] WARN: ${message}`, data ? JSON.stringify(data) : ''),
+        error: (message: string, data?: object) => console.error(`[WF ${event.instanceId ?? 'N/A'}] ERROR: ${message}`, data ? JSON.stringify(data) : ''),
     }
     workflowLogger.log("Starting ProcessNewsItemWorkflow", { headlineUrl, publicationId });
 
-    // --- Step 1: Check if headline exists --- 
+    // Step 1: Check if headline exists
     const existingHeadline = await step.do('check database for existing record', async () => {
       workflowLogger.log('Checking database for URL', { headlineUrl });
       if (!this.env.DB) {
         workflowLogger.error('Workflow Error: DB binding missing.');
-        throw new Error('Database binding (DB) is not configured for the workflow environment.');
+        throw new Error('Database binding (DB) is not configured.');
       }
       try {
         const record = await getHeadlineByUrl(this.env.DB, headlineUrl);
         workflowLogger.log('Database check result', { exists: !!record });
-        return record ? { exists: true, id: record.id } : { exists: false }; 
+        return record ? { exists: true, id: record.id } : { exists: false };
       } catch (dbError) {
         workflowLogger.error('Workflow Step Error: Failed to query database', { headlineUrl, dbError });
-        throw dbError; 
+        throw dbError;
       }
     });
 
-    // --- Step 2: Decide Path (Update or Create) --- 
+    // Step 2: Decide Path
     if (existingHeadline.exists) {
-      workflowLogger.log('Record already exists, skipping further processing.', { id: existingHeadline.id, url: headlineUrl });
-      return; // End workflow execution
+      workflowLogger.log('Record already exists, skipping.', { id: existingHeadline.id, url: headlineUrl });
+      // @ts-ignore - state property might not be in WorkflowStep type yet
+      step.state = { outcome: 'skipped_exists', existingId: existingHeadline.id };
+      return;
     }
 
-    // --- Step 3: Analyze New Headline with Google AI --- 
+    // Step 3: Analyze New Headline with Google AI
     workflowLogger.log('Headline does not exist, proceeding to analyze.', { headlineUrl });
-    const analysisResult = await step.do('analyze and categorize headline', async () => {
-       workflowLogger.log('Starting Google AI analysis for headline', { headlineText });
-
-       // Check for API Key first
+    await step.do('analyze and categorize headline',
+    {
+        retries: {
+            limit: 3,
+            delay: '5 seconds',
+            backoff: 'exponential',
+        },
+        timeout: '1 minute',
+    },
+    async () => {
+       workflowLogger.log('Starting Google AI analysis', { headlineText });
        if (!this.env.GOOGLE_AI_STUDIO_API_KEY) {
-         workflowLogger.error('Workflow Error: GOOGLE_AI_STUDIO_API_KEY binding missing.');
-         throw new Error('Google AI API Key is not configured for the workflow environment.');
+         workflowLogger.error('Workflow Error: GOOGLE_AI_STUDIO_API_KEY missing.');
+         throw new Error('Google AI API Key is not configured.');
        }
-       
-       // Initialize Google AI client
+       if (!this.env.AI) {
+          workflowLogger.error('Workflow Error: AI binding missing.');
+          throw new Error('AI binding is not configured.');
+       }
        const cloudflare = createWorkersAI({binding: this.env.AI});
+       const allowedCategories = headlineCategories.join(', ');
+       const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the schema provided.`;
+       const userPrompt = `Headline: "${headlineText}"\nSnippet: "${snippet || 'N/A'}"\n\nCategorize this headline.`;
 
-      const allowedCategories = headlineCategories.join(', ');
-      const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the schema provided.`;
-      const userPrompt = `Headline: "${headlineText}"\nSnippet: "${snippet || 'N/A'}"\n\nCategorize this headline.`;
-      
       try {
         const { object: aiResultObject } = await generateObject({
             model: cloudflare('@cf/meta/llama-3.3-70b-instruct-fp8-fast'),
-            schema: HeadlineCategorySchema, // Pass Zod schema directly
+            schema: HeadlineCategorySchema,
             system: systemPrompt,
             prompt: userPrompt,
         });
-       
-        workflowLogger.log('Google AI Response Object', { response: aiResultObject });
-
-        // Handle null category explicitly (if AI returns null, map it to 'other')
-        // generateObject should have already validated against the schema
-        const category = aiResultObject.category ?? 'other'; 
-        
+        const category = aiResultObject.category ?? 'other';
         workflowLogger.log('Google AI analysis successful', { category });
-        return { category }; // Return the category object expected by later steps
-
+        // @ts-ignore - state property might not be in WorkflowStep type yet
+        step.state = { category };
+        return { category };
       } catch (aiError) {
-         // Log the error and re-throw to trigger workflow step retry
          workflowLogger.error('Google AI generateObject failed', { headlineText, aiError });
          throw aiError;
       }
     });
 
-    const headlineCategory = analysisResult.category;
+    // --- Retrieve category from step state ---
+    // @ts-ignore - state property might not be in WorkflowStep type yet
+    const stateCategory = (step.state as { category: string | null })?.category;
+    // Ensure the category is valid or default to 'other' - use specific type assertion
+    const headlineCategory = headlineCategories.includes(stateCategory as typeof headlineCategories[number]) 
+      ? stateCategory as typeof headlineCategories[number] 
+      : 'other';
 
-    // --- Step 4: Store New Headline in DB --- 
+    // Step 4: Store New Headline in DB
     await step.do('store new headline in db', async () => {
       workflowLogger.log('Attempting to store new headline', { headlineUrl, category: headlineCategory });
       if (!this.env.DB) {
          workflowLogger.error('Workflow Error: DB binding missing for insert.');
-         throw new Error('Database binding (DB) is not configured for the workflow environment.');
+         throw new Error('Database binding (DB) is not configured.');
       }
       const headlineData: Omit<InsertHeadline, 'id'> = {
           url: headlineUrl,
@@ -1714,24 +1740,28 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
           source: source,
           rawDate: rawDate,
           normalizedDate: normalizedDate,
-          category: headlineCategory, 
+          category: headlineCategory, // Use the validated category
           publicationId: publicationId,
       };
       try {
          await insertHeadline(this.env.DB, headlineData);
          workflowLogger.log('Successfully inserted new headline', { headlineUrl });
+         // @ts-ignore - state property might not be in WorkflowStep type yet
+         step.state = { outcome: 'inserted_new' };
          return { inserted: true };
       } catch (dbError) {
           if (dbError instanceof Error && dbError.name === 'DatabaseError' && dbError.message.includes('already exists')) {
              workflowLogger.warn(`Headline likely inserted concurrently. URL: ${headlineUrl}`, { dbErrorDetails: (dbError as DatabaseError).details });
-             return { inserted: false, concurrent: true }; 
+             // @ts-ignore - state property might not be in WorkflowStep type yet
+             step.state = { outcome: 'skipped_concurrent_insert' };
+             return { inserted: false, concurrent: true };
           }
           workflowLogger.error('Workflow Step Error: Failed to insert headline', { headlineData, dbError });
           throw dbError;
       }
     });
 
-    workflowLogger.log("Finished ProcessNewsItemWorkflow: Created new record", { headlineUrl });
+    workflowLogger.log("Finished ProcessNewsItemWorkflow", { headlineUrl });
   }
 }
 
