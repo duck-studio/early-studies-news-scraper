@@ -26,7 +26,10 @@ import { authMiddleware, handleDatabaseError } from "../middleware";
 
 import { fetchAllPagesForUrl } from "../services/serper";
 
-import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from "../utils";
+import { getDateRange, parseSerperDate } from "../utils/date/parsers";
+import { getGeoParams, getTbsString } from "../utils/date/search-params";
+import { normalizeUrl } from "../utils/url";
+import { queueBatchMessages } from "../services/queue";
 
 // Type for sync operation result
 type SyncSummary = z.infer<typeof ManualSyncResponseDataSchema>;
@@ -123,7 +126,7 @@ async function performHeadlineSync(
     const fetchPromises = publicationUrls.map((url) =>
       fetchLimit(() =>
         fetchAllPagesForUrl(
-          `https://${url}`,
+          normalizeUrl(url, true),
           tbs,
           geoParams,
           env.SERPER_API_KEY,
@@ -140,9 +143,6 @@ async function performHeadlineSync(
     let headlinesFilteredCount = 0;
     let messagesSent = 0;
     let _messageSendErrors = 0;
-    const queueSendLimit = pLimit(50);
-    const queueSendPromises: Promise<unknown>[] = [];
-    let messageDelaySeconds = 0;
 
     const processedHeadlines = fetchResults.flatMap((result) => {
       logger.debug({ url: result.url, hasError: !!result.error }, "Processing fetch result");
@@ -151,7 +151,7 @@ async function performHeadlineSync(
         return [];
       }
 
-      const urlWithoutProtocol = result.url.replace("https://", "");
+      const urlWithoutProtocol = normalizeUrl(result.url, false);
       const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
 
       if (!publicationId) {
@@ -180,11 +180,14 @@ async function performHeadlineSync(
     const totalFetched = processedHeadlines.length;
     logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
 
+    // Prepare queue payloads
+    const itemsToQueue: ProcessNewsItemParams[] = [];
+    
     for (const item of processedHeadlines) {
       const parsedDate = parseSerperDate(item.rawDate);
       if (parsedDate) {
         headlinesFilteredCount++;
-        const messagePayload: ProcessNewsItemParams = {
+        itemsToQueue.push({
           headlineUrl: item.url,
           publicationId: item.publicationId,
           headlineText: item.headline,
@@ -192,29 +195,7 @@ async function performHeadlineSync(
           source: item.source,
           rawDate: item.rawDate,
           normalizedDate: item.normalizedDate,
-        };
-
-        if (messagesSent > 0 && messagesSent % 10 === 0) {
-          messageDelaySeconds++;
-          logger.debug(`Increased message delay to ${messageDelaySeconds} seconds.`);
-        }
-
-        queueSendPromises.push(
-          queueSendLimit(async () => {
-            try {
-              await env.NEWS_ITEM_QUEUE.send(messagePayload, { delaySeconds: messageDelaySeconds });
-              logger.debug(
-                `Sent message to queue for headline: ${item.url} with delay ${messageDelaySeconds}s`
-              );
-              messagesSent++;
-            } catch (queueError) {
-              logger.error(`Failed to send message to queue for headline: ${item.url}`, {
-                error: queueError,
-              });
-              _messageSendErrors++;
-            }
-          })
-        );
+        });
       } else {
         logger.debug(
           { headline: item.headline, rawDate: item.rawDate },
@@ -222,7 +203,19 @@ async function performHeadlineSync(
         );
       }
     }
-    await Promise.allSettled(queueSendPromises);
+    
+    // Queue the messages
+    if (itemsToQueue.length > 0) {
+      const queueResult = await queueBatchMessages(
+        env.NEWS_ITEM_QUEUE,
+        itemsToQueue,
+        logger,
+        { concurrency: 50, delayIncrementBatch: 10, delayIncrementSeconds: 1 }
+      );
+      
+      messagesSent = queueResult.messagesSent;
+      _messageSendErrors = queueResult.messageSendErrors;
+    }
 
     summary = {
       publicationsFetched: fetchResults.filter((r) => !r.error).length,

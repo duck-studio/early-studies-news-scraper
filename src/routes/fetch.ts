@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi/zod";
-import pLimit from "p-limit";
 import { z } from "zod";
 
 import {
@@ -18,7 +17,10 @@ import { authMiddleware } from "../middleware";
 
 import { fetchAllPagesForUrl, publicationLimit } from "../services/serper";
 
-import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from "../utils";
+import { getDateRange, parseSerperDate } from "../utils/date/parsers";
+import { getGeoParams, getTbsString } from "../utils/date/search-params";
+import { normalizeUrl } from "../utils/url";
+import { queueBatchMessages } from "../services/queue";
 
 // Type for workflow item params
 type ProcessNewsItemParams = {
@@ -200,9 +202,7 @@ fetchRouter.post(
         );
 
       // Ensure requested URLs have https:// before fetching
-      const publicationUrlsWithHttps = requestedPublicationUrls.map((url) =>
-        url.startsWith("https://") ? url : `https://${url}`
-      );
+      const publicationUrlsWithHttps = requestedPublicationUrls.map(url => normalizeUrl(url, true));
 
       const publicationPromises = publicationUrlsWithHttps.map((url) =>
         publicationLimit(() => fetchPublicationWithLimit(url))
@@ -321,47 +321,21 @@ fetchRouter.post(
 
       // --- Send Messages to Queue if requested ---
       let messagesSent = 0;
-      let messageSendErrors = 0;
+      let _messageSendErrors = 0;
+      
       if (triggerWorkflow && itemsToQueue.length > 0) {
-        logger.info(
-          `Attempting to queue ${itemsToQueue.length} headlines for workflow processing.`
+        logger.info(`Attempting to queue ${itemsToQueue.length} headlines for workflow processing.`);
+        
+        const result = await queueBatchMessages(
+          c.env.NEWS_ITEM_QUEUE,
+          itemsToQueue,
+          logger,
+          { concurrency: 50, delayIncrementBatch: 10, delayIncrementSeconds: 1 }
         );
-        const queueSendLimit = pLimit(50);
-        const queueSendPromises: Promise<unknown>[] = [];
-        let messageDelaySeconds = 0;
-
-        for (const payload of itemsToQueue) {
-          // Increment delay every 10 messages to stagger queue sends
-          if (messagesSent > 0 && messagesSent % 10 === 0) {
-            messageDelaySeconds++;
-          }
-
-          queueSendPromises.push(
-            queueSendLimit(async () => {
-              try {
-                // Send to the queue
-                await c.env.NEWS_ITEM_QUEUE.send(payload, { delaySeconds: messageDelaySeconds });
-                logger.debug(
-                  `Sent message to queue for headline: ${payload.headlineUrl} with delay ${messageDelaySeconds}s`
-                );
-                messagesSent++;
-              } catch (queueError) {
-                logger.error(
-                  `Failed to send message to queue for headline: ${payload.headlineUrl}`,
-                  { error: queueError }
-                );
-                messageSendErrors++;
-              }
-            })
-          );
-        }
-
-        // Wait for all queue send operations to settle
-        await Promise.allSettled(queueSendPromises);
-        logger.info(`Successfully sent ${messagesSent} messages to the queue.`);
-        if (messageSendErrors > 0) {
-          logger.warn(`Failed to send ${messageSendErrors} messages to the queue.`);
-        }
+        
+        messagesSent = result.messagesSent;
+        _messageSendErrors = result.messageSendErrors;
+        
       } else if (triggerWorkflow) {
         logger.info(
           "TriggerWorkflow was true, but no eligible headlines found/mapped to queue after filtering."

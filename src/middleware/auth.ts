@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono';
 import { Logger } from 'pino';
-import { validateToken } from '../utils';
+import { validateToken } from '../utils/auth/token';
 
 export function createAuthMiddleware() {
   return async (c: Context<{ Variables: { logger: Logger; requestId: string }; Bindings: Env }>, next: Next) => {

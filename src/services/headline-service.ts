@@ -4,7 +4,7 @@ import { type InsertHeadline, getPublications, insertPublication } from "../db/q
 import { headlineCategories } from "../db/schema";
 import { fetchAllPagesForUrl } from "../services/serper";
 import type { ProcessNewsItemParams } from "../types";
-import { getGeoParams, getTbsString } from "../utils";
+import { getGeoParams, getTbsString } from "../utils/date/search-params";
 import { normalizeUrl } from "../utils/url";
 
 // Type for headline categories

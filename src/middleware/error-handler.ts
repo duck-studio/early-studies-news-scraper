@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { StandardErrorSchema } from '../schema';
 import { DatabaseError } from '../db/queries';
 import { Logger } from 'pino';
-import { parseDdMmYyyy } from '../utils';
+import { parseDdMmYyyy } from '../utils/date/parsers';
 
 export function handleDatabaseError(
   c: Context<{ Variables: { logger: Logger; requestId: string }; Bindings: Env }>,
