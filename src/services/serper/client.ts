@@ -162,7 +162,8 @@ export async function fetchSerperAccountDetails(
 
         attemptLogger.debug(
           {
-            accountType: result.plan,
+            balance: result.balance,
+            rateLimit: result.rateLimit,
           },
           'Serper account details received'
         );
