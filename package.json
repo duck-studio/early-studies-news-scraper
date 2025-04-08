@@ -21,7 +21,8 @@
     "db:migrate:local": "npx wrangler d1 migrations apply early-studies-d1-database",
     "db:studio": "drizzle-kit studio --config=./src/db/drizzle.config.ts",
     "db:seed": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql --remote",
-    "db:seed:local": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql"
+    "db:seed:local": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql",
+    "extract:headlines": "tsx src/scripts/extract-headlines.ts"
   },
   "keywords": [],
   "author": "",

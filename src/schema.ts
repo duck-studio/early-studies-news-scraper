@@ -6,7 +6,23 @@ import { headlineCategories, publicationCategories } from "./db/schema"; // Impo
 // const RegionSchema = z.enum(['US', 'UK']); // Remove unused enum conflicting with Zod schema
 const PublicationUrlsSchema = z
   .array(z.string().url({ message: "Each publication URL must be a valid URL." }))
-  .min(1, { message: "At least one publication URL is required." });
+  .min(1, { message: "At least one publication URL is required." })
+  .default([
+    "https://bbc.co.uk",
+    "https://theguardian.com",
+    "https://telegraph.co.uk",
+    "https://thetimes.co.uk",
+    "https://ft.com",
+    "https://economist.com",
+    "https://independent.co.uk",
+    "https://thesun.co.uk",
+    "https://dailymail.co.uk",
+    "https://mirror.co.uk",
+    "https://express.co.uk",
+    "https://standard.co.uk",
+    "https://spectator.co.uk",
+    "https://newstatesman.com",
+  ]);
 const DateRangeEnumSchema = z.enum([
   "Past Hour",
   "Past 24 Hours",
@@ -39,6 +55,7 @@ const TransformedNewsItemSchema = z.object({
   snippet: z.string(),
   source: z.string(),
   rawDate: z.string(),
+  normalizedDate: z.string().optional(),
 });
 
 const SerperSearchParametersSchema = z.object({
@@ -90,43 +107,101 @@ const HeadlinesFetchRequestBaseSchema = z.object({
       message:
         "Custom TBS string must start with 'tbs=cdr:1,cd_min:' (note: the 'tbs=' prefix will be automatically removed when sent to the API).",
     })
-    .optional(),
+    .optional()
+    .default("tbs=cdr:1,cd_min:04/01/2025,cd_max:04/08/2025")
+    .describe(
+      "Required if dateRangeOption is 'Custom'. Custom time-based search string for Google Search. Format: 'tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY'. Example for March 19-25, 2024: 'tbs=cdr:1,cd_min:03/19/2024,cd_max:03/25/2024'"
+    ),
   maxQueriesPerPublication: z
     .number()
     .int()
     .positive("Max queries per publication must be a positive integer.")
     .optional()
     .default(5),
-  flattenResults: z.boolean().optional().default(true),
+  flattenResults: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("If true, returns a flat array of headlines. If false, groups by publication URL."),
+  triggerWorkflow: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "If true, trigger a processing workflow (categorization, DB check/insert) for each fetched headline that matches the date range."
+    ),
 });
 
 // --- Hono Request Input Schema ---
 export const HeadlinesFetchRequestSchema = HeadlinesFetchRequestBaseSchema.refine(
-  (data) =>
-    data.dateRangeOption !== "Custom" ||
-    (typeof data.customTbs === "string" && data.customTbs.length > 0),
+  (data) => {
+    if (data.dateRangeOption === "Custom") {
+      // Check if customTbs is provided and has the expected format parts
+      const validFormat =
+        typeof data.customTbs === "string" &&
+        data.customTbs.includes("cd_min:") &&
+        data.customTbs.includes("cd_max:");
+      // Basic date format check within the string (MM/DD/YYYY) - could be more robust
+      const dateRegex = /\d{1,2}\/\d{1,2}\/\d{4}/g;
+      const datesFound = data.customTbs?.match(dateRegex);
+      return validFormat && datesFound && datesFound.length >= 2;
+    }
+    return true; // Not 'Custom', no customTbs required
+  },
   {
     message:
-      "The 'customTbs' parameter is required and must be non-empty when 'dateRangeOption' is 'Custom'.",
-    path: ["customTbs"],
+      "When 'dateRangeOption' is 'Custom', 'customTbs' is required and must contain 'cd_min:MM/DD/YYYY' and 'cd_max:MM/DD/YYYY'.",
+    path: ["customTbs"], // Check the customTbs field itself
   }
-).openapi({ ref: "HeadlinesFetchRequest" });
+).openapi({
+  ref: "HeadlinesFetchRequest",
+  example: {
+    // Updated example
+    publicationUrls: ["https://bbc.co.uk"],
+    region: "UK",
+    dateRangeOption: "Past Week",
+    maxQueriesPerPublication: 5,
+    flattenResults: true,
+    triggerWorkflow: false, // Example value added
+  },
+});
 
 // --- OpenAPI Response Schemas ---
 const HeadlinesFetchSummarySchema = z.object({
-  totalResults: z.number(),
-  totalCreditsConsumed: z.number(),
-  totalQueriesMade: z.number(),
-  successCount: z.number(),
-  failureCount: z.number(),
+  totalResults: z
+    .number()
+    .openapi({ description: "Total number of headlines returned after filtering." }),
+  totalCreditsConsumed: z
+    .number()
+    .openapi({ description: "Total Serper credits consumed by the requests." }),
+  totalQueriesMade: z
+    .number()
+    .openapi({ description: "Total number of individual Serper API queries made." }),
+  successCount: z
+    .number()
+    .openapi({ description: "Number of publication URLs successfully fetched." }),
+  failureCount: z
+    .number()
+    .openapi({ description: "Number of publication URLs that failed to fetch." }),
+  workflowsQueued: z
+    .number()
+    .int()
+    .optional()
+    .openapi({ description: "Number of workflows triggered if triggerWorkflow was true." }),
 });
+
+// Export the summary schema type as well
+export type HeadlinesFetchSummary = z.infer<typeof HeadlinesFetchSummarySchema>;
 
 export const HeadlinesFetchResponseSchema = z
   .object({
-    results: z.array(TransformedNewsItemSchema),
+    results: z.union([z.array(TransformedNewsItemSchema), z.array(FetchResultSchema)]).openapi({
+      description:
+        "Array of fetched headline results. Flat array if flattenResults is true, grouped by publication if false.",
+    }),
     summary: HeadlinesFetchSummarySchema,
   })
-  .openapi({ ref: "HeadlinesFetchResponse" });
+  .openapi({ ref: "HeadlinesFetchResponseData" });
 
 // Updated Error Detail Schema (can be string or object)
 const ErrorDetailSchema = z.union([z.string(), z.record(z.unknown())]).openapi({
@@ -580,7 +655,7 @@ export const HeadlinesQueryStdResponseSchema = createStandardResponseSchema(
 // Standard response for fetching headlines
 export const HeadlinesFetchStdResponseSchema = createStandardResponseSchema(
   HeadlinesFetchResponseSchema, // Original data structure is nested here
-  "HeadlinesFetchResponse"
+  "HeadlinesFetchResponse" // Ref name for the whole standard response
 );
 
 // Standard response for single item creates/updates/deletes where the item is returned
@@ -625,7 +700,7 @@ export const ManualSyncRequestSchema = z
       // })
       .optional()
       .describe(
-        "Required if dateRangeOption is 'Custom'. Format: 'tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY'"
+        "Required if dateRangeOption is 'Custom'. Custom time-based search string for Google Search. Format: 'tbs=cdr:1,cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY'. Example for March 19-25, 2024: 'tbs=cdr:1,cd_min:03/19/2024,cd_max:03/25/2024'"
       ),
     maxQueriesPerPublication: z
       .number()

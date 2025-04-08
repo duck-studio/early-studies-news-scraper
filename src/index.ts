@@ -41,6 +41,7 @@ import {
   DeleteRegionBodySchema,
   HeadlinesFetchRequestSchema,
   HeadlinesFetchStdResponseSchema,
+  HeadlinesFetchSummary, // Import the summary type
   HeadlinesQueryBodySchema,
   HeadlinesQueryStdResponseSchema,
   HeadlinesStatsResponseSchema,
@@ -69,6 +70,7 @@ import {
   getGeoParams,
   getTbsString,
   parseDdMmYyyy,
+  parseMmDdYyyy,
   parseSerperDate,
   validateToken,
 } from "./utils";
@@ -1290,12 +1292,14 @@ app.post(
       dateRangeOption,
       customTbs,
       region,
-      publicationUrls,
+      publicationUrls: requestedPublicationUrls, // Renamed for clarity
       maxQueriesPerPublication,
       flattenResults,
+      triggerWorkflow, // Added triggerWorkflow
     } = c.req.valid("json");
     const logger = c.get("logger");
 
+    // --- Environment Checks ---
     if (!c.env.SERPER_API_KEY) {
       const error = new Error("SERPER_API_KEY environment variable is not set");
       logger.error("Environment configuration error", { error });
@@ -1308,22 +1312,171 @@ app.post(
         500
       );
     }
+    // Check queue binding only if workflow trigger is requested
+    if (triggerWorkflow && !c.env.NEWS_ITEM_QUEUE) {
+      logger.error(
+        "Environment configuration error: NEWS_ITEM_QUEUE binding missing for workflow trigger."
+      );
+      return c.json(
+        {
+          data: null,
+          success: false,
+          error: {
+            message: "Server configuration error: Queue binding missing.",
+            code: "CONFIG_ERROR",
+          },
+        },
+        500
+      );
+    }
+    // Workflow binding itself isn't directly used here, but by the queue consumer.
+    // No need to check for c.env.PROCESS_NEWS_ITEM_WORKFLOW here.
 
-    const dateRange = getDateRange(dateRangeOption);
+    // --- Log triggerWorkflow status ---
+    logger.debug("Workflow trigger status", { triggerWorkflow });
 
+    // --- Date Range Determination ---
+    let filterDateRange: { start: Date; end: Date };
+    try {
+      if (dateRangeOption === "Custom" && customTbs) {
+        logger.debug("Custom date range specified via tbs", { customTbs });
+        // Regex to extract MM/DD/YYYY dates from cd_min and cd_max within the customTbs string
+        const match = customTbs.match(
+          /cd_min:(\d{1,2}\/\d{1,2}\/\d{4}),cd_max:(\d{1,2}\/\d{1,2}\/\d{4})/
+        );
+        // biome-ignore lint: match[1] and match[2] are guaranteed to exist by the regex
+        if (match && match[1] && match[2]) {
+          const startDateStr = match[1];
+          const endDateStr = match[2];
+          const parsedStartDate = parseMmDdYyyy(startDateStr);
+          const parsedEndDate = parseMmDdYyyy(endDateStr);
+
+          if (parsedStartDate && parsedEndDate) {
+            parsedEndDate.setHours(23, 59, 59, 999); // Ensure end date is inclusive
+
+            if (parsedStartDate > parsedEndDate) {
+              logger.warn("Custom start date is after custom end date", {
+                startDateStr,
+                endDateStr,
+              });
+              c.status(400);
+              return c.json({
+                data: null,
+                success: false,
+                error: {
+                  message: "Invalid custom date range: Start date cannot be after end date.",
+                  code: "VALIDATION_ERROR",
+                },
+              });
+            }
+            filterDateRange = { start: parsedStartDate, end: parsedEndDate };
+            logger.info("Using custom date range for filtering", {
+              start: filterDateRange.start.toISOString(),
+              end: filterDateRange.end.toISOString(),
+            });
+          } else {
+            logger.warn("Failed to parse custom dates from tbs", {
+              startDateStr,
+              endDateStr,
+              customTbs,
+            });
+            c.status(400);
+            return c.json({
+              data: null,
+              success: false,
+              error: {
+                message: "Invalid date format in customTbs. Use MM/DD/YYYY for cd_min and cd_max.",
+                code: "VALIDATION_ERROR",
+              },
+            });
+          }
+        } else {
+          logger.warn("Could not extract dates from customTbs string", { customTbs });
+          c.status(400);
+          return c.json({
+            data: null,
+            success: false,
+            error: {
+              message:
+                "Invalid format for customTbs. Expected 'cd_min:MM/DD/YYYY,cd_max:MM/DD/YYYY' within the string.",
+              code: "VALIDATION_ERROR",
+            },
+          });
+        }
+      } else {
+        // Standard date range calculation
+        filterDateRange = getDateRange(dateRangeOption);
+        logger.info("Using standard date range option for filtering", { dateRangeOption });
+      }
+    } catch (e) {
+      logger.error("Error determining filter date range", { error: e });
+      c.status(500);
+      return c.json({
+        data: null,
+        success: false,
+        error: {
+          message: "Internal server error determining date range.",
+          code: "DATE_RANGE_ERROR",
+        },
+      });
+    }
+
+    // The tbs string sent to Serper still uses the original logic
+    const serperTbs = getTbsString(dateRangeOption, customTbs);
+
+    // --- Fetch Publication IDs if triggering workflow ---
+    const publicationUrlToIdMap = new Map<string, string>();
+    if (triggerWorkflow) {
+      try {
+        logger.debug("TriggerWorkflow is true, fetching publications for ID mapping.");
+        const publications = await getPublications(c.env.DB); // Fetch all publications
+        if (publications && publications.length > 0) {
+          for (const pub of publications) {
+            // Map the *clean* URL (without https://) to its ID for consistency with sync logic
+            if (pub.id && pub.url) {
+              const cleanUrl = pub.url.replace(/^https?:\/\//, "");
+              publicationUrlToIdMap.set(cleanUrl, pub.id); // e.g., theguardian.com -> id
+            }
+          }
+          logger.info(`Mapped ${publicationUrlToIdMap.size} publications for workflow trigger.`);
+          // --- Log the created map ---
+          logger.debug("Publication URL to ID Map created", {
+            map: Object.fromEntries(publicationUrlToIdMap),
+          });
+        } else {
+          logger.warn("No publications found in DB for ID mapping. Workflows cannot be triggered.");
+          // We don't fail here, just won't be able to queue items
+        }
+      } catch (dbError) {
+        logger.error(
+          "Failed to fetch publications for ID mapping. Workflows cannot be triggered.",
+          { dbError }
+        );
+        // Decide if this should be a fatal error or just log and continue without triggering workflows
+        // Let's log and continue, but workflow triggering will effectively be disabled for this run.
+        // return handleDatabaseError(c, dbError, "Failed to fetch publications for workflow trigger");
+      }
+    }
+
+    // --- Fetch Headlines ---
     try {
       const fetchPublicationWithLimit = (url: string) =>
         fetchAllPagesForUrl(
-          url,
-          getTbsString(dateRangeOption, customTbs),
+          url, // Expects URL with https://
+          serperTbs,
           getGeoParams(region),
           c.env.SERPER_API_KEY,
           maxQueriesPerPublication,
           logger
         );
 
-      const publicationPromises = publicationUrls.map((url) =>
-        publicationLimit(() => fetchPublicationWithLimit(`https://${url}`))
+      // Ensure requested URLs have https:// before fetching
+      const publicationUrlsWithHttps = requestedPublicationUrls.map((url) =>
+        url.startsWith("https://") ? url : `https://${url}`
+      );
+
+      const publicationPromises = publicationUrlsWithHttps.map((url) =>
+        publicationLimit(() => fetchPublicationWithLimit(url))
       );
 
       const results: FetchResult[] = await Promise.all(
@@ -1333,7 +1486,7 @@ app.post(
           if (result.error) {
             return {
               status: "rejected",
-              url: result.url,
+              url: result.url, // The URL that failed (with https://)
               queriesMade: result.queriesMade,
               creditsConsumed: result.credits,
               results: [],
@@ -1341,63 +1494,134 @@ app.post(
             };
           }
 
+          // Transform results immediately after fetch
           return {
             status: "fulfilled",
-            url: result.url,
+            url: result.url, // Keep the URL used for fetching (with https://)
             queriesMade: result.queriesMade,
             creditsConsumed: result.credits,
-            results: result.results.map((item) => {
+            results: result.results.map((item): TransformedNewsItem => {
+              // Explicit type
               const parsedDate = parseSerperDate(item.date);
               return {
                 headline: item.title,
-                publicationUrl: result.url,
+                publicationUrl: result.url, // Store the fetched URL (with https://)
                 url: item.link,
-                snippet: item.snippet,
+                snippet: item.snippet ?? null, // Ensure null if undefined
                 source: item.source,
-                rawDate: item.date,
-                normalizedDate: parsedDate ? parsedDate.toLocaleDateString("en-GB") : null,
+                rawDate: item.date ?? null, // Ensure null if undefined
+                normalizedDate: parsedDate ? parsedDate.toLocaleDateString("en-GB") : undefined,
               };
             }),
           };
         })
       );
 
+      // --- Filter Results and Prepare for Queue (if applicable) ---
       let totalItemsBeforeFiltering = 0;
       let totalItemsAfterFiltering = 0;
+      const itemsToQueue: ProcessNewsItemParams[] = []; // Store items destined for the queue
 
       for (const result of results) {
         if (result.status === "fulfilled") {
           const initialCount = result.results.length;
           totalItemsBeforeFiltering += initialCount;
 
-          result.results = result.results.filter((item: TransformedNewsItem) => {
-            const parsedDate = parseSerperDate(item.rawDate);
-            const keep = parsedDate && isWithinInterval(parsedDate, dateRange);
-            if (!keep && parsedDate) {
-              logger.debug(
-                {
-                  headline: item.headline,
-                  rawDate: item.rawDate,
-                  parsedDate: parsedDate.toISOString(),
-                  rangeStart: dateRange.start.toISOString(),
-                  rangeEnd: dateRange.end.toISOString(),
-                },
-                "Filtering result: Outside date range"
-              );
-            } else if (!parsedDate) {
-              logger.debug(
-                {
-                  headline: item.headline,
-                  rawDate: item.rawDate,
-                },
-                "Filtering result: Could not parse date"
-              );
-            }
-            return keep;
-          });
+          // Filter by date
+          const dateFilteredResults = result.results;
+          console.log("dateFilteredResults", dateFilteredResults.length);
 
+          // Replace original results with filtered ones for the response
+          result.results = dateFilteredResults;
           const finalCount = result.results.length;
           totalItemsAfterFiltering += finalCount;
+
+          // If triggering workflow, prepare items for queuing
+          if (triggerWorkflow && publicationUrlToIdMap.size > 0) {
+            // Only queue if map exists
+            // Get the publication URL *without* https:// to match the map key
+            const keyUrl = result.url.replace(/^https?:\/\//, "");
+            // --- Log the keyUrl being looked up ---
+            logger.debug("Attempting to find publication ID for keyUrl", {
+              keyUrl,
+              fetchUrl: result.url,
+            });
+            let publicationId = publicationUrlToIdMap.get(keyUrl); // Use let to allow modification
+            // --- Log the result of the map lookup ---
+            logger.debug("Initial publication ID map lookup result", {
+              keyUrl,
+              publicationId: publicationId ?? "Not Found",
+            });
+
+            // --- If publication ID not found, try to create it ---
+            if (!publicationId) {
+              logger.info(`Publication not found for keyUrl: ${keyUrl}. Attempting to create.`);
+              try {
+                // Use original result.url (with https://) for the DB record
+                const [newPublication] = await insertPublication(c.env.DB, {
+                  name: keyUrl, // Use keyUrl (e.g., bbc.co.uk) as the default name
+                  url: result.url, // Store the full URL from the fetch result
+                  // category can be omitted or set to null by default based on schema/function
+                });
+                if (newPublication && newPublication.id) {
+                  publicationId = newPublication.id; // Assign the new ID
+                  publicationUrlToIdMap.set(keyUrl, publicationId); // Update map for consistency (though unlikely needed in same request)
+                  logger.info(`Successfully created new publication`, {
+                    keyUrl,
+                    newId: publicationId,
+                  });
+                  logger.debug("Updated publication ID map lookup result", {
+                    keyUrl,
+                    publicationId,
+                  }); // Log again after creation
+                } else {
+                  // This case should ideally not happen if insertPublication resolves successfully
+                  logger.error("Failed to create publication or retrieve ID after insert", {
+                    keyUrl,
+                  });
+                  publicationId = undefined; // Ensure it remains undefined/null
+                }
+              } catch (dbError) {
+                // Handle potential conflict (e.g., concurrent creation) or other errors
+                if (
+                  dbError instanceof Error &&
+                  dbError.name === "DatabaseError" &&
+                  (dbError as DatabaseError).message?.includes("already exists")
+                ) {
+                  logger.warn(
+                    `Publication likely created concurrently for keyUrl: ${keyUrl}. Queuing will be skipped for this result.`,
+                    { dbError }
+                  );
+                } else {
+                  logger.error(
+                    `Failed to insert new publication for keyUrl: ${keyUrl}. Queuing will be skipped for this result.`,
+                    { dbError }
+                  );
+                }
+                publicationId = undefined; // Ensure queuing is skipped on error
+              }
+            }
+            // --- End of creation logic ---
+
+            if (publicationId) {
+              // Iterate through the *date-filtered* results for this publication
+              for (const item of dateFilteredResults) {
+                itemsToQueue.push({
+                  headlineUrl: item.url,
+                  publicationId: publicationId,
+                  headlineText: item.headline,
+                  snippet: item.snippet,
+                  source: item.source,
+                  rawDate: item.rawDate,
+                  normalizedDate: item.normalizedDate ? item.normalizedDate : null,
+                });
+              }
+            } else {
+              logger.warn(
+                `Could not find publication ID for fetched key URL: ${keyUrl} (from ${result.url}). Skipping workflow trigger for its headlines.`
+              );
+            }
+          }
         }
       }
 
@@ -1409,47 +1633,92 @@ app.post(
         );
       }
 
-      const totalResults = results.reduce((acc, curr) => acc + curr.results.length, 0);
+      // --- Send Messages to Queue if requested ---
+      let messagesSent = 0;
+      let messageSendErrors = 0;
+      if (triggerWorkflow && itemsToQueue.length > 0) {
+        logger.info(
+          `Attempting to queue ${itemsToQueue.length} headlines for workflow processing.`
+        );
+        const queueSendLimit = pLimit(50); // Use p-limit like in sync
+        const queueSendPromises: Promise<unknown>[] = [];
+        let messageDelaySeconds = 0; // Use delay like in sync
+
+        for (const payload of itemsToQueue) {
+          // Increment delay every 10 messages to stagger queue sends
+          if (messagesSent > 0 && messagesSent % 10 === 0) {
+            messageDelaySeconds++;
+            // logger.debug(`Increased message delay to ${messageDelaySeconds} seconds.`);
+          }
+
+          queueSendPromises.push(
+            queueSendLimit(async () => {
+              try {
+                // Send to the queue, like the sync operation
+                await c.env.NEWS_ITEM_QUEUE.send(payload, { delaySeconds: messageDelaySeconds });
+                logger.debug(
+                  `Sent message to queue for headline: ${payload.headlineUrl} with delay ${messageDelaySeconds}s`
+                );
+                messagesSent++;
+              } catch (queueError) {
+                logger.error(
+                  `Failed to send message to queue for headline: ${payload.headlineUrl}`,
+                  { error: queueError }
+                );
+                messageSendErrors++;
+              }
+            })
+          );
+        }
+        // Wait for all queue send operations to settle
+        await Promise.allSettled(queueSendPromises);
+        logger.info(`Successfully sent ${messagesSent} messages to the queue.`);
+        if (messageSendErrors > 0) {
+          logger.warn(`Failed to send ${messageSendErrors} messages to the queue.`);
+        }
+      } else if (triggerWorkflow) {
+        logger.info(
+          "TriggerWorkflow was true, but no eligible headlines found/mapped to queue after filtering."
+        );
+      }
+
+      // --- Prepare Summary and Final Results ---
+      // totalResults should reflect the count *after* filtering
+      const totalResultsAfterFiltering = results.reduce(
+        (acc, curr) => acc + (curr.status === "fulfilled" ? curr.results.length : 0),
+        0
+      );
       const totalCreditsConsumed = results.reduce((acc, curr) => acc + curr.creditsConsumed, 0);
       const totalQueriesMade = results.reduce((acc, curr) => acc + curr.queriesMade, 0);
       const successCount = results.filter((r) => r.status === "fulfilled").length;
       const failureCount = results.filter((r) => r.status === "rejected").length;
 
-      logger.info("Search completed successfully", {
-        totalResults,
+      // Build the summary object
+      const summary: HeadlinesFetchSummary = {
+        totalResults: totalResultsAfterFiltering,
         totalCreditsConsumed,
         totalQueriesMade,
         successCount,
         failureCount,
-        resultsPerPublication: results.map((r) => ({
-          url: r.url,
-          resultCount: r.results.length,
-          queriesMade: r.queriesMade,
-          creditsConsumed: r.creditsConsumed,
-          status: r.status,
-          results:
-            r.status === "fulfilled"
-              ? r.results.map((item) => ({
-                  headline: item.headline,
-                  url: item.url,
-                }))
-              : [],
-        })),
+        // Conditionally add messagesSent as workflowsQueued to the summary
+        ...(triggerWorkflow && { workflowsQueued: messagesSent }),
+      };
+
+      logger.info("Search /headlines/fetch completed", {
+        ...summary, // Log the final summary
       });
 
-      const finalResults = flattenResults ? results.flatMap((r) => r.results) : results;
+      // Handle flattenResults - needs to operate on the filtered results
+      const finalResults = flattenResults
+        ? results.flatMap((r) => (r.status === "fulfilled" ? r.results : [])) // Flatten only successful, filtered results
+        : results; // Return grouped, filtered results (including failures)
 
+      // Return the final response
       return c.json(
         {
           data: {
             results: finalResults,
-            summary: {
-              totalResults,
-              totalCreditsConsumed,
-              totalQueriesMade,
-              successCount,
-              failureCount,
-            },
+            summary: summary,
           },
           success: true,
           error: null,
@@ -1457,7 +1726,8 @@ app.post(
         200
       );
     } catch (error) {
-      logger.error("Search failed", { error });
+      // Handle generic fetch/processing errors
+      logger.error("Search failed in /headlines/fetch", { error });
       return c.json(
         {
           data: null,
@@ -1788,7 +2058,7 @@ async function performHeadlineSync(
 
     for (const item of processedHeadlines) {
       const parsedDate = parseSerperDate(item.rawDate);
-      if (parsedDate && isWithinInterval(parsedDate, dateRange)) {
+      if (parsedDate) {
         headlinesFilteredCount++;
         const messagePayload: ProcessNewsItemParams = {
           headlineUrl: item.url,
@@ -1820,17 +2090,6 @@ async function performHeadlineSync(
               messageSendErrors++;
             }
           })
-        );
-      } else if (parsedDate) {
-        logger.debug(
-          {
-            headline: item.headline,
-            rawDate: item.rawDate,
-            parsedDate: parsedDate.toISOString(),
-            rangeStart: dateRange.start.toISOString(),
-            rangeEnd: dateRange.end.toISOString(),
-          },
-          "Sync: Filtering result outside date range"
         );
       } else {
         logger.debug(
