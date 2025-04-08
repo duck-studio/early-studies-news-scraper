@@ -11,6 +11,7 @@ import fetchRouter from './fetch';
 import headlinesRouter from './headlines';
 import publicationsRouter from './publications';
 import regionsRouter from './regions';
+import settingsRouter from './settings';
 import statsRouter from './stats';
 import syncRouter from './sync';
 
@@ -100,6 +101,7 @@ export function createAppRouter() {
   app.route('/publications', publicationsRouter);
   app.route('/regions', regionsRouter);
   app.route('/headlines', headlinesRouter);
+  app.route('/settings', settingsRouter);
   app.route('/stats', statsRouter);
   app.route('/', fetchRouter); // Routes like /headlines/fetch
   app.route('/sync', syncRouter);
@@ -161,4 +163,12 @@ export function createAppRouter() {
 }
 
 // Export routers for direct access
-export { fetchRouter, headlinesRouter, publicationsRouter, regionsRouter, syncRouter, statsRouter };
+export {
+  fetchRouter,
+  headlinesRouter,
+  publicationsRouter,
+  regionsRouter,
+  settingsRouter,
+  syncRouter,
+  statsRouter,
+};

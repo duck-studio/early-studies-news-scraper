@@ -19,6 +19,56 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
+          // Check if sync is enabled in settings
+          const { getSettings } = await import('./db/queries');
+          let settings = null;
+
+          try {
+            settings = await getSettings(env.DB);
+          } catch (dbError) {
+            logger.warn('Could not fetch settings from database. Using environment variables.', {
+              dbError,
+            });
+          }
+
+          // If settings aren't available, use environment variables
+          const syncEnabled = settings?.syncEnabled ?? env.SYNC_ENABLED === 'true';
+          const syncFrequency = settings?.syncFrequency ?? env.SYNC_FREQUENCY ?? 'daily';
+          const defaultRegion = settings?.defaultRegion ?? env.DEFAULT_REGION ?? 'UK';
+
+          if (!syncEnabled) {
+            logger.info('Scheduled sync is disabled in settings. Skipping sync.');
+            return;
+          }
+
+          // Get current cron expression from scheduled event
+          const cronExpression = event.cron;
+          // Use syncFrequency from earlier (with fallbacks)
+
+          // Determine if we should run based on sync frequency setting
+          let shouldRun = false;
+
+          // Map cron expressions to frequency options
+          if (cronExpression === '0 0 * * *' && syncFrequency === 'daily') {
+            shouldRun = true;
+          } else if (cronExpression === '0 0 */2 * *' && syncFrequency === 'everyOtherDay') {
+            shouldRun = true;
+          } else if (cronExpression === '0 0 * * 1' && syncFrequency === 'weekly') {
+            shouldRun = true;
+          } else if (cronExpression === '0 0 1,15 * *' && syncFrequency === 'fortnightly') {
+            shouldRun = true;
+          } else if (cronExpression === '0 0 1 * *' && syncFrequency === 'monthly') {
+            shouldRun = true;
+          }
+
+          // If frequency doesn't match the current cron, skip execution
+          if (!shouldRun) {
+            logger.info(
+              `Scheduled sync skipped: Current frequency setting (${syncFrequency}) doesn't match this cron trigger (${cronExpression}).`
+            );
+            return;
+          }
+
           // Get yesterday and today's dates in DD/MM/YYYY format
           const today = new Date();
           const yesterday = new Date(today);
@@ -27,7 +77,16 @@ export default {
           const yesterdayStr = yesterday.toLocaleDateString('en-GB'); // Format as DD/MM/YYYY
           const todayStr = today.toLocaleDateString('en-GB'); // Format as DD/MM/YYYY
 
-          await performHeadlineSync(env, logger, 'scheduled', yesterdayStr, todayStr, 5);
+          logger.info(`Running scheduled sync with defaultRegion: ${defaultRegion}`);
+          await performHeadlineSync(
+            env,
+            logger,
+            'scheduled',
+            yesterdayStr,
+            todayStr,
+            5,
+            defaultRegion
+          );
         } catch (error) {
           logger.error('Scheduled headline sync failed.', { error });
         }

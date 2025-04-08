@@ -8,6 +8,7 @@ import {
   eq,
   gte,
   inArray,
+  lt,
   lte,
   sql,
 } from 'drizzle-orm';
@@ -32,6 +33,11 @@ export type PublicationRegion = InferSelectModel<typeof schema.publicationRegion
 export type InsertPublicationRegion = InferInsertModel<typeof schema.publicationRegions>;
 export type SyncRun = InferSelectModel<typeof schema.syncRuns>;
 export type InsertSyncRun = InferInsertModel<typeof schema.syncRuns>;
+export type Settings = InferSelectModel<typeof schema.settings>;
+export type UpsertSettings = Omit<
+  InferInsertModel<typeof schema.settings>,
+  'id' | 'createdAt' | 'updatedAt'
+>;
 
 // --- Filter Types ---
 type PublicationFilters = {
@@ -829,6 +835,121 @@ export async function getLastSyncRun(db: D1Database): Promise<SyncRun | null> {
     return result[0] ?? null;
   } catch (error: unknown) {
     throw createDbError('Failed to get last sync run record', {
+      errorMessage: getErrorMessage(error),
+    });
+  }
+}
+
+/**
+ * Deletes headlines older than the specified number of months
+ * @param db D1Database instance
+ * @param monthsOld Number of months to keep (delete headlines older than this)
+ * @returns Object with count of deleted records and query execution details
+ */
+export async function deleteOldHeadlines(
+  db: D1Database,
+  monthsOld = 3
+): Promise<{ deletedCount: number }> {
+  const drizzleDb = drizzle(db, { schema });
+
+  try {
+    // Calculate the cutoff date (current date minus specified months)
+    const now = new Date();
+    const cutoffDate = new Date(now.getFullYear(), now.getMonth() - monthsOld, now.getDate());
+
+    // Format cutoff date as YYYY-MM-DD for SQL comparison
+    // Since normalizedDate is stored as DD/MM/YYYY, we need to use the SQL conversion
+    const cutoffDateFormatted = format(cutoffDate, 'yyyy-MM-dd');
+
+    // Use the same SQL expression as in other queries to convert normalizedDate to YYYY-MM-DD
+    const normalizedDateYYYYMMDD = sql<string>`substr(${schema.headlines.normalizedDate}, 7, 4) || '-' || substr(${schema.headlines.normalizedDate}, 4, 2) || '-' || substr(${schema.headlines.normalizedDate}, 1, 2)`;
+
+    // Delete headlines older than the cutoff date
+    const result = await drizzleDb
+      .delete(schema.headlines)
+      .where(
+        and(
+          // Only delete headlines that have a normalizedDate
+          sql`${schema.headlines.normalizedDate} IS NOT NULL`,
+          // Delete where the converted date is less than the cutoff date
+          lt(normalizedDateYYYYMMDD, cutoffDateFormatted)
+        )
+      )
+      .returning({ id: schema.headlines.id });
+
+    return { deletedCount: result.length };
+  } catch (error: unknown) {
+    throw createDbError('Failed to delete old headlines', {
+      monthsOld,
+      errorMessage: getErrorMessage(error),
+    });
+  }
+}
+
+// --- Settings Queries ---
+
+/**
+ * Get the application settings (singleton record)
+ */
+export async function getSettings(db: D1Database): Promise<Settings | null> {
+  const drizzleDb = drizzle(db, { schema });
+  try {
+    const result = await drizzleDb
+      .select()
+      .from(schema.settings)
+      .where(eq(schema.settings.id, 1))
+      .limit(1);
+    return result[0] ?? null;
+  } catch (error: unknown) {
+    throw createDbError('Failed to get application settings', {
+      errorMessage: getErrorMessage(error),
+    });
+  }
+}
+
+/**
+ * Upsert application settings (ensures singleton pattern)
+ */
+export async function upsertSettings(db: D1Database, data: UpsertSettings): Promise<Settings> {
+  const drizzleDb = drizzle(db, { schema });
+  try {
+    // First check if settings exists
+    const existing = await drizzleDb
+      .select()
+      .from(schema.settings)
+      .where(eq(schema.settings.id, 1))
+      .limit(1);
+
+    if (existing.length > 0) {
+      // Update existing record
+      const [updated] = await drizzleDb
+        .update(schema.settings)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(schema.settings.id, 1))
+        .returning();
+
+      if (!updated) {
+        throw createDbError('Failed to update settings');
+      }
+      return updated;
+    }
+
+    // Insert new record
+    const [inserted] = await drizzleDb
+      .insert(schema.settings)
+      .values({ ...data, id: 1 })
+      .returning();
+
+    if (!inserted) {
+      throw createDbError('Failed to insert settings');
+    }
+    return inserted;
+  } catch (error: unknown) {
+    if (isDatabaseError(error)) {
+      throw error; // Re-throw our custom errors
+    }
+    throw createDbError('Failed to update application settings', {
+      data,
       errorMessage: getErrorMessage(error),
     });
   }

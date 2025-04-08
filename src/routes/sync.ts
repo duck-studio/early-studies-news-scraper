@@ -44,7 +44,8 @@ async function performHeadlineSync(
   triggerType: 'manual' | 'scheduled',
   startDate: string,
   endDate: string,
-  maxQueriesPerPublication: number
+  maxQueriesPerPublication: number,
+  defaultRegion = 'UK'
 ): Promise<SyncSummary> {
   logger.info('Starting headline sync...', {
     triggerType,
@@ -70,9 +71,26 @@ async function performHeadlineSync(
 
   let summary: SyncSummary | undefined;
   try {
-    if (!env.SERPER_API_KEY) {
-      throw new Error('Server configuration error: SERPER_API_KEY missing.');
+    // Get settings to check for API key
+    let apiKey = env.SERPER_API_KEY; // Default from env
+    try {
+      const { getSettings } = await import('../db/queries');
+      const settings = await getSettings(env.DB);
+      if (settings?.serperApiKey) {
+        // Use API key from settings if available
+        apiKey = settings.serperApiKey;
+        logger.info('Using Serper API key from settings');
+      }
+    } catch (settingsError) {
+      logger.warn('Could not get settings for Serper API key, using env var', { settingsError });
     }
+
+    if (!apiKey) {
+      throw new Error(
+        'Server configuration error: Serper API Key missing from both settings and environment variables.'
+      );
+    }
+
     if (!env.NEWS_ITEM_QUEUE) {
       throw new Error('Server configuration error: NEWS_ITEM_QUEUE binding missing.');
     }
@@ -116,15 +134,18 @@ async function performHeadlineSync(
       end: new Date(endParts[2], endParts[1] - 1, endParts[0]),
     };
 
-    // Use the shared function to fetch headlines for all publications
-    const region = 'UK';
-    logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
+    // Use the provided defaultRegion parameter, which already includes fallbacks
+    const region = defaultRegion;
+
+    logger.info(
+      `Fetching headlines for ${publicationUrls.length} publications with region: ${region}...`
+    );
     const fetchResults = await batchFetchHeadlines(
       publicationUrls,
       startDate,
       endDate,
       region,
-      env.SERPER_API_KEY,
+      apiKey,
       maxQueriesPerPublication,
       logger
     );
@@ -162,6 +183,17 @@ async function performHeadlineSync(
     });
 
     logger.info('Sync task finished successfully.', { syncRunId, ...summary });
+
+    // Clean up old headlines after successful sync
+    try {
+      const { deleteOldHeadlines } = await import('../db/queries');
+      const result = await deleteOldHeadlines(env.DB, 3); // Delete headlines older than 3 months
+      logger.info('Cleaned up old headlines', { deletedCount: result.deletedCount });
+    } catch (cleanupError) {
+      // Just log the error, don't fail the entire sync
+      logger.warn('Failed to clean up old headlines', { cleanupError });
+    }
+
     return summary;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -242,6 +274,18 @@ syncRouter.post(
     const logger = c.get('logger');
 
     try {
+      // Check if settings exist to get defaultRegion
+      let defaultRegion = 'UK';
+      try {
+        const { getSettings } = await import('../db/queries');
+        const settings = await getSettings(c.env.DB);
+        if (settings?.defaultRegion) {
+          defaultRegion = settings.defaultRegion;
+        }
+      } catch (error) {
+        logger.warn('Failed to get settings for defaultRegion', { error });
+      }
+
       // Pass 'manual' as the trigger type
       const syncSummary = await performHeadlineSync(
         c.env,
@@ -249,7 +293,8 @@ syncRouter.post(
         'manual',
         startDate,
         endDate,
-        maxQueriesPerPublication
+        maxQueriesPerPublication,
+        defaultRegion
       );
 
       return c.json(

@@ -194,12 +194,37 @@ export const syncRuns = sqliteTable(
   })
 );
 
+// --- Settings Table (Singleton) ---
+
+export const syncFrequencyOptions = [
+  'daily',
+  'weekly',
+  'fortnightly',
+  'monthly',
+  'everyOtherDay',
+] as const;
+
+export const settings = sqliteTable('settings', {
+  id: integer('id').primaryKey().default(1), // Always 1 for singleton
+  syncEnabled: integer('sync_enabled', { mode: 'boolean' }).default(true).notNull(),
+  syncFrequency: text('sync_frequency', { enum: syncFrequencyOptions }).default('daily').notNull(),
+  defaultRegion: text('default_region').default('UK').notNull(),
+  serperApiKey: text('serper_api_key'), // Optional API key, null means use env var
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .default(sql`(strftime('%s', 'now'))`)
+    .notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .default(sql`(strftime('%s', 'now'))`)
+    .$onUpdate(() => sql`(strftime('%s', 'now'))`),
+});
+
 export const schema = {
   publications,
   regions,
   publicationRegions,
   headlines,
   syncRuns,
+  settings,
   publicationRelations,
   regionRelations,
   publicationRegionRelations,
