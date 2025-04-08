@@ -2,7 +2,7 @@ import pLimit from "p-limit";
 import { Logger } from "pino";
 import { type InsertHeadline, insertPublication } from "../db/queries";
 import { headlineCategories } from "../db/schema";
-import { fetchAllPagesForUrl } from "../fetcher";
+import { fetchAllPagesForUrl } from "../services/serper";
 import type { ProcessNewsItemParams } from "../types";
 import { getGeoParams, getTbsString } from "../utils";
 

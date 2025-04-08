@@ -24,7 +24,7 @@ import {
 
 import { authMiddleware, handleDatabaseError } from "../middleware";
 
-import { fetchAllPagesForUrl } from "../fetcher";
+import { fetchAllPagesForUrl } from "../services/serper";
 
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from "../utils";
 

@@ -16,7 +16,7 @@ import { getPublications, insertPublication } from "../db/queries";
 
 import { authMiddleware } from "../middleware";
 
-import { fetchAllPagesForUrl, publicationLimit } from "../fetcher";
+import { fetchAllPagesForUrl, publicationLimit } from "../services/serper";
 
 import { getDateRange, getGeoParams, getTbsString, parseSerperDate } from "../utils";
 
