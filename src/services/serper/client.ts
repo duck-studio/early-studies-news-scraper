@@ -1,7 +1,7 @@
 import retry from 'async-retry';
 import type { Logger } from 'pino';
-import { config } from '../../config';
 import type { GeoParams, SerperNewsResult } from '../../schema';
+import { config } from './config';
 
 /**
  * Fetches a single page of news results from the Serper API for a given site query

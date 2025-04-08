@@ -1,8 +1,8 @@
 import pLimit from 'p-limit';
 import type { Logger } from 'pino';
-import { config } from '../../config';
 import type { FetchAllPagesResult, GeoParams, SerperNewsItem } from '../../schema';
 import { fetchSerperPage } from './client';
+import { config } from './config';
 
 // Create a concurrency limiter for parallel processing of multiple publications
 export const publicationLimit = pLimit(config.concurrencyLimit);
