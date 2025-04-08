@@ -39,6 +39,8 @@ export const headlineCategories = [
   "other",
 ] as const;
 
+export type HeadlineCategory = (typeof headlineCategories)[number];
+
 export const publications = sqliteTable(
   "publications",
   {
