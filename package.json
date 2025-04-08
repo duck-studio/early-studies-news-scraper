@@ -22,6 +22,8 @@
     "db:studio": "drizzle-kit studio --config=./src/db/drizzle.config.ts",
     "db:seed": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql --remote",
     "db:seed:local": "npx wrangler d1 execute early-studies-d1-database --file=src/db/seed.sql",
+    "db:scaffold": "pnpm run db:generate && pnpm run db:migrate && pnpm run db:seed",
+    "db:scaffold:local": "pnpm run db:generate && pnpm run db:migrate:local && pnpm run db:seed:local",
     "extract:headlines": "tsx src/scripts/extract-headlines.ts"
   },
   "keywords": [],
