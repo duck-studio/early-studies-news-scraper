@@ -394,14 +394,25 @@ export const InsertPublicationSchema = PublicationBaseSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
-}).openapi({
-  ref: 'InsertPublication',
-  example: {
-    name: 'The Example Herald',
-    url: 'https://exampleherald.com',
-    category: 'digital',
-  },
-});
+})
+  .extend({
+    regions: z
+      .array(z.string())
+      .optional()
+      .openapi({
+        description: 'Array of region names to associate with this publication',
+        example: ['UK', 'US'],
+      }),
+  })
+  .openapi({
+    ref: 'InsertPublication',
+    example: {
+      name: 'The Example Herald',
+      url: 'https://exampleherald.com',
+      category: 'digital',
+      regions: ['UK'],
+    },
+  });
 export const InsertRegionSchema = RegionBaseSchema.omit({ id: true }).openapi({
   ref: 'InsertRegion',
   example: { name: 'Canada' },
