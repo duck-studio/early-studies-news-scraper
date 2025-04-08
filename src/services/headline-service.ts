@@ -271,26 +271,96 @@ export function prepareQueueItemsFromFetchResults(
     return transformedResults;
   });
 
+  // Extract date range from fetch results
+  let startDate: Date | undefined;
+  let endDate: Date | undefined;
+
+  // Find first fetchResult with dateRange info
+  for (const result of fetchResults) {
+    // Look for tbs parameter to extract date range
+    if (result.tbsParams?.includes('cd_min:') && result.tbsParams?.includes('cd_max:')) {
+      const minMatch = result.tbsParams.match(/cd_min:(\d+\/\d+\/\d+)/);
+      const maxMatch = result.tbsParams.match(/cd_max:(\d+\/\d+\/\d+)/);
+
+      if (minMatch && maxMatch) {
+        // MM/DD/YYYY format from TBS params
+        const minParts = minMatch[1].split('/').map(Number);
+        const maxParts = maxMatch[1].split('/').map(Number);
+
+        startDate = new Date(minParts[2], minParts[0] - 1, minParts[1]);
+        endDate = new Date(maxParts[2], maxParts[0] - 1, maxParts[1]);
+        break;
+      }
+    }
+  }
+
+  // Apply 2-day buffer to date range if we have dates
+  const bufferDays = 2;
+  let startDateWithBuffer: Date | undefined;
+  let endDateWithBuffer: Date | undefined;
+
+  if (startDate && endDate) {
+    startDateWithBuffer = new Date(startDate);
+    startDateWithBuffer.setDate(startDateWithBuffer.getDate() - bufferDays);
+
+    endDateWithBuffer = new Date(endDate);
+    endDateWithBuffer.setDate(endDateWithBuffer.getDate() + bufferDays);
+
+    logger.debug(
+      {
+        originalRange: { start: startDate.toISOString(), end: endDate.toISOString() },
+        bufferedRange: {
+          start: startDateWithBuffer.toISOString(),
+          end: endDateWithBuffer.toISOString(),
+        },
+      },
+      'Date filtering applied with buffer'
+    );
+  }
+
   // Filter by date and prepare queue items
   for (const item of processedHeadlines) {
     const parsedDate = parseSerperDate(item.rawDate);
-    if (parsedDate) {
-      headlinesFilteredCount++;
-      itemsToQueue.push({
-        headlineUrl: item.url,
-        publicationId: item.publicationId,
-        headlineText: item.headline,
-        snippet: item.snippet,
-        source: item.source,
-        rawDate: item.rawDate,
-        normalizedDate: item.normalizedDate,
-      });
-    } else {
+
+    // Skip items without a parsed date
+    if (!parsedDate) {
       logger.debug(
         { headline: item.headline, rawDate: item.rawDate },
         'Filtering result, could not parse date'
       );
+      continue;
     }
+
+    // Apply date range filtering if we have a date range with buffer
+    if (startDateWithBuffer && endDateWithBuffer) {
+      // Check if date is within the buffered range
+      if (parsedDate < startDateWithBuffer || parsedDate > endDateWithBuffer) {
+        logger.debug(
+          {
+            headline: item.headline,
+            date: parsedDate.toISOString(),
+            range: {
+              start: startDateWithBuffer.toISOString(),
+              end: endDateWithBuffer.toISOString(),
+            },
+          },
+          'Filtering result outside of date range (with buffer)'
+        );
+        continue;
+      }
+    }
+
+    // Item passed all filters
+    headlinesFilteredCount++;
+    itemsToQueue.push({
+      headlineUrl: item.url,
+      publicationId: item.publicationId,
+      headlineText: item.headline,
+      snippet: item.snippet,
+      source: item.source,
+      rawDate: item.rawDate,
+      normalizedDate: item.normalizedDate,
+    });
   }
 
   return { itemsToQueue, headlinesFilteredCount };

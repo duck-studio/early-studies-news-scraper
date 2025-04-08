@@ -225,8 +225,40 @@ fetchRouter.post(
         if (result.status === 'fulfilled') {
           // Process the results from this publication URL
 
-          // Date filtering is simplified here as we don't do advanced filtering
-          const dateFilteredResults = result.results;
+          // Apply date filtering with a buffer of a few days on either side
+          const dateFilteredResults = result.results.filter((item) => {
+            if (!item.normalizedDate) return false;
+
+            // Parse dates (normalizedDate is in DD/MM/YYYY format)
+            const parts = item.normalizedDate.split('/');
+            if (parts.length !== 3) return false;
+
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1; // JS months are 0-indexed
+            const year = parseInt(parts[2], 10);
+
+            const itemDate = new Date(year, month, day);
+
+            // Parse startDate and endDate from input (also in DD/MM/YYYY format)
+            const startParts = startDate.split('/').map(Number);
+            const endParts = endDate.split('/').map(Number);
+
+            // Create date objects with a 2-day buffer on either side
+            const bufferDays = 2;
+            const startDateWithBuffer = new Date(
+              startParts[2],
+              startParts[1] - 1,
+              startParts[0] - bufferDays
+            );
+            const endDateWithBuffer = new Date(
+              endParts[2],
+              endParts[1] - 1,
+              endParts[0] + bufferDays
+            );
+
+            // Only include items within the buffered date range
+            return itemDate >= startDateWithBuffer && itemDate <= endDateWithBuffer;
+          });
 
           // Replace original results with filtered ones for the response
           result.results = dateFilteredResults;

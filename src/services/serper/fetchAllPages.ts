@@ -40,6 +40,7 @@ export async function fetchAllPagesForUrl(
       queriesMade: 0,
       credits: 0,
       results: [],
+      tbsParams: tbs,
       error: new Error(`Invalid URL format: ${url}`),
     };
   }
@@ -127,6 +128,7 @@ export async function fetchAllPagesForUrl(
         queriesMade,
         credits: totalCredits,
         results: aggregatedResults,
+        tbsParams: tbs,
         error: error as Error,
       };
     }
@@ -136,5 +138,5 @@ export async function fetchAllPagesForUrl(
     { queriesMade, totalResults: aggregatedResults.length, totalCredits },
     'Finished fetching for URL.'
   );
-  return { url, queriesMade, credits: totalCredits, results: aggregatedResults };
+  return { url, queriesMade, credits: totalCredits, results: aggregatedResults, tbsParams: tbs };
 }
