@@ -1,6 +1,4 @@
 import { apiReference } from "@scalar/hono-api-reference";
-import { generateObject } from "ai";
-import { isWithinInterval } from "date-fns";
 import { type Context, Hono, type Next } from "hono";
 import { describeRoute, openAPISpecs } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi/zod";
@@ -8,7 +6,6 @@ import { HTTPException } from "hono/http-exception";
 import { type StatusCode } from "hono/utils/http-status";
 import pLimit from "p-limit";
 import type { Logger } from "pino";
-import { createWorkersAI } from "workers-ai-provider";
 import { ZodError, z } from "zod";
 import {
   type DatabaseError,
@@ -1537,7 +1534,8 @@ app.post(
           totalItemsAfterFiltering += finalCount;
 
           // If triggering workflow, prepare items for queuing
-          if (triggerWorkflow && publicationUrlToIdMap.size > 0) {
+          if (triggerWorkflow) {
+            // Check only triggerWorkflow, handle map lookup/creation inside
             // Only queue if map exists
             // Get the publication URL *without* https:// to match the map key
             const keyUrl = result.url.replace(/^https?:\/\//, "");
@@ -1563,10 +1561,11 @@ app.post(
                   url: result.url, // Store the full URL from the fetch result
                   // category can be omitted or set to null by default based on schema/function
                 });
-                if (newPublication && newPublication.id) {
+                if (newPublication?.id) {
+                  // Use optional chaining
                   publicationId = newPublication.id; // Assign the new ID
                   publicationUrlToIdMap.set(keyUrl, publicationId); // Update map for consistency (though unlikely needed in same request)
-                  logger.info(`Successfully created new publication`, {
+                  logger.info("Successfully created new publication", {
                     keyUrl,
                     newId: publicationId,
                   });
@@ -2371,14 +2370,6 @@ type ProcessNewsItemParams = {
   normalizedDate: string | null;
 };
 
-// Zod schema for the expected AI output
-const HeadlineCategorySchema = z.object({
-  category: z
-    .enum(headlineCategories)
-    .nullable()
-    .describe("The determined headline category, or null if none clearly apply."),
-});
-
 // Define the Workflow class (reverted to original structure)
 export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNewsItemParams> {
   async run(event: WorkflowEvent<ProcessNewsItemParams>, step: WorkflowStep) {
@@ -2405,24 +2396,36 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
     workflowLogger.log("Starting ProcessNewsItemWorkflow", { headlineUrl, publicationId });
 
     // Step 1: Check if headline exists
-    const existingHeadline = await step.do("check database for existing record", async () => {
-      workflowLogger.log("Checking database for URL", { headlineUrl });
-      if (!this.env.DB) {
-        workflowLogger.error("Workflow Error: DB binding missing.");
-        throw new Error("Database binding (DB) is not configured.");
+    const existingHeadline = await step.do(
+      "check database for existing record",
+      {
+        retries: {
+          // Add retry logic
+          limit: 3,
+          delay: "1 second",
+          backoff: "exponential",
+        },
+        timeout: "30 seconds", // Add a reasonable timeout
+      },
+      async () => {
+        workflowLogger.log("Checking database for URL", { headlineUrl });
+        if (!this.env.DB) {
+          workflowLogger.error("Workflow Error: DB binding missing.");
+          throw new Error("Database binding (DB) is not configured.");
+        }
+        try {
+          const record = await getHeadlineByUrl(this.env.DB, headlineUrl);
+          workflowLogger.log("Database check result", { exists: !!record });
+          return record ? { exists: true, id: record.id } : { exists: false };
+        } catch (dbError) {
+          workflowLogger.error("Workflow Step Error: Failed to query database", {
+            headlineUrl,
+            dbError,
+          });
+          throw dbError;
+        }
       }
-      try {
-        const record = await getHeadlineByUrl(this.env.DB, headlineUrl);
-        workflowLogger.log("Database check result", { exists: !!record });
-        return record ? { exists: true, id: record.id } : { exists: false };
-      } catch (dbError) {
-        workflowLogger.error("Workflow Step Error: Failed to query database", {
-          headlineUrl,
-          dbError,
-        });
-        throw dbError;
-      }
-    });
+    );
 
     // Step 2: Decide Path
     if (existingHeadline.exists) {
@@ -2457,29 +2460,7 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
           workflowLogger.error("Workflow Error: AI binding missing.");
           throw new Error("AI binding is not configured.");
         }
-        const cloudflare = createWorkersAI({ binding: this.env.AI });
-        const allowedCategories = headlineCategories.join(", ");
-        const systemPrompt = `You are a news categorization assistant. Your task is to categorize the provided news headline and snippet into ONE of the following categories: ${allowedCategories}. If the headline doesn't clearly fit into any of these categories, categorize it as 'other'. Respond ONLY with a JSON object matching the schema provided.`;
-        const userPrompt = `Headline: "${headlineText}"\nSnippet: "${
-          snippet || "N/A"
-        }"\n\nCategorize this headline.`;
-
-        try {
-          const { object: aiResultObject } = await generateObject({
-            model: cloudflare("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
-            schema: HeadlineCategorySchema,
-            system: systemPrompt,
-            prompt: userPrompt,
-          });
-          const category = aiResultObject.category ?? "other";
-          workflowLogger.log("Google AI analysis successful", { category });
-          // @ts-ignore - state property might not be in WorkflowStep type yet
-          step.state = { category };
-          return { category };
-        } catch (aiError) {
-          workflowLogger.error("Google AI generateObject failed", { headlineText, aiError });
-          throw aiError;
-        }
+        return "other";
       }
     );
 
@@ -2494,51 +2475,79 @@ export class ProcessNewsItemWorkflow extends WorkflowEntrypoint<Env, ProcessNews
       : "other";
 
     // Step 4: Store New Headline in DB
-    await step.do("store new headline in db", async () => {
-      workflowLogger.log("Attempting to store new headline", {
-        headlineUrl,
-        category: headlineCategory,
-      });
-      if (!this.env.DB) {
-        workflowLogger.error("Workflow Error: DB binding missing for insert.");
-        throw new Error("Database binding (DB) is not configured.");
-      }
-      const headlineData: Omit<InsertHeadline, "id"> = {
-        url: headlineUrl,
-        headline: headlineText,
-        snippet: snippet,
-        source: source,
-        rawDate: rawDate,
-        normalizedDate: normalizedDate,
-        category: headlineCategory, // Use the validated category
-        publicationId: publicationId,
-      };
-      try {
-        await insertHeadline(this.env.DB, headlineData);
-        workflowLogger.log("Successfully inserted new headline", { headlineUrl });
-        // @ts-ignore - state property might not be in WorkflowStep type yet
-        step.state = { outcome: "inserted_new" };
-        return { inserted: true };
-      } catch (dbError) {
-        if (
-          dbError instanceof Error &&
-          dbError.name === "DatabaseError" &&
-          dbError.message.includes("already exists")
-        ) {
-          workflowLogger.warn(`Headline likely inserted concurrently. URL: ${headlineUrl}`, {
-            dbErrorDetails: (dbError as DatabaseError).details,
-          });
+    await step.do(
+      "store new headline in db",
+      {
+        // Add retry logic
+        retries: {
+          limit: 3,
+          delay: "1 second",
+          backoff: "exponential",
+        },
+        timeout: "30 seconds", // Add a reasonable timeout
+      },
+      async () => {
+        // ---> Add check for valid publicationId from payload <---
+        if (!publicationId) {
+          workflowLogger.error(
+            "Workflow Step Error: Missing or invalid publicationId in payload. Cannot store headline.",
+            {
+              headlineUrl,
+              receivedPublicationId: publicationId,
+            }
+          );
+          // Skip the insert attempt if publicationId is invalid
           // @ts-ignore - state property might not be in WorkflowStep type yet
-          step.state = { outcome: "skipped_concurrent_insert" };
-          return { inserted: false, concurrent: true };
+          step.state = { outcome: "skipped_invalid_pub_id" };
+          return { inserted: false, skipped: true };
         }
-        workflowLogger.error("Workflow Step Error: Failed to insert headline", {
-          headlineData,
-          dbError,
+        // ---> End check <---
+
+        workflowLogger.log("Attempting to store new headline", {
+          headlineUrl,
+          category: headlineCategory,
         });
-        throw dbError;
+        if (!this.env.DB) {
+          workflowLogger.error("Workflow Error: DB binding missing for insert.");
+          throw new Error("Database binding (DB) is not configured.");
+        }
+        const headlineData: Omit<InsertHeadline, "id"> = {
+          url: headlineUrl,
+          headline: headlineText,
+          snippet: snippet,
+          source: source,
+          rawDate: rawDate,
+          normalizedDate: normalizedDate,
+          category: headlineCategory, // Use the validated category
+          publicationId: publicationId,
+        };
+        try {
+          await insertHeadline(this.env.DB, headlineData);
+          workflowLogger.log("Successfully inserted new headline", { headlineUrl });
+          // @ts-ignore - state property might not be in WorkflowStep type yet
+          step.state = { outcome: "inserted_new" };
+          return { inserted: true };
+        } catch (dbError) {
+          if (
+            dbError instanceof Error &&
+            dbError.name === "DatabaseError" &&
+            dbError.message.includes("already exists")
+          ) {
+            workflowLogger.warn(`Headline likely inserted concurrently. URL: ${headlineUrl}`, {
+              dbErrorDetails: (dbError as DatabaseError).details,
+            });
+            // @ts-ignore - state property might not be in WorkflowStep type yet
+            step.state = { outcome: "skipped_concurrent_insert" };
+            return { inserted: false, concurrent: true };
+          }
+          workflowLogger.error("Workflow Step Error: Failed to insert headline", {
+            headlineData,
+            dbError,
+          });
+          throw dbError;
+        }
       }
-    });
+    );
 
     workflowLogger.log("Finished ProcessNewsItemWorkflow", { headlineUrl });
   }
