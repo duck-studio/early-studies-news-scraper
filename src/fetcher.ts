@@ -1,6 +1,6 @@
-import { 
-  fetchAllPagesForUrl as _fetchAllPagesForUrl, 
-  publicationLimit as _publicationLimit
+import {
+  fetchAllPagesForUrl as _fetchAllPagesForUrl,
+  publicationLimit as _publicationLimit,
 } from './services/serper';
 
 // Re-export the functions from the Serper service

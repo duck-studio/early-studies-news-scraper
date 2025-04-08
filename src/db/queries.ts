@@ -1,4 +1,4 @@
-import { format } from "date-fns";
+import { format } from 'date-fns';
 import {
   type InferInsertModel,
   type InferSelectModel,
@@ -10,15 +10,15 @@ import {
   inArray,
   lte,
   sql,
-} from "drizzle-orm";
-import { drizzle } from "drizzle-orm/d1";
+} from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/d1';
 import {
   headlineCategories,
   publicationCategories,
   schema,
   syncRunStatuses,
   syncRunTriggerTypes,
-} from "./schema";
+} from './schema';
 
 // --- Inferred Types ---
 export type Publication = InferSelectModel<typeof schema.publications>;
@@ -52,14 +52,14 @@ type HeadlineFilters = {
 
 // Define interface for custom errors
 export interface DatabaseError extends Error {
-  name: "DatabaseError";
+  name: 'DatabaseError';
   details?: Record<string, unknown>;
 }
 
 // Helper function to create a standard error object with additional details
 export function createDbError(message: string, details?: Record<string, unknown>): DatabaseError {
   const error = new Error(message) as DatabaseError;
-  error.name = "DatabaseError"; // Custom error name for easy identification
+  error.name = 'DatabaseError'; // Custom error name for easy identification
   if (details) {
     error.details = details;
   }
@@ -76,7 +76,7 @@ function getErrorMessage(error: unknown): string {
 
 // Helper to determine if an error is our custom DatabaseError
 function isDatabaseError(error: unknown): error is DatabaseError {
-  return error instanceof Error && error.name === "DatabaseError";
+  return error instanceof Error && error.name === 'DatabaseError';
 }
 
 export async function getPublications(db: D1Database, filters?: PublicationFilters) {
@@ -112,7 +112,7 @@ export async function getPublications(db: D1Database, filters?: PublicationFilte
         // If none of the provided region names were found, return no results based on region filter
         console.warn(
           `No valid regions found for names: ${filters.regionNames.join(
-            ", "
+            ', '
           )}. No publications will be returned based on this region filter.`
         );
         conditions.push(sql`${schema.publications.id} IS NULL`);
@@ -129,14 +129,14 @@ export async function getPublications(db: D1Database, filters?: PublicationFilte
     });
     return results;
   } catch (error: unknown) {
-    throw createDbError("Failed to get publications", {
+    throw createDbError('Failed to get publications', {
       filters,
       errorMessage: getErrorMessage(error),
     });
   }
 }
 
-export async function insertPublication(db: D1Database, data: Omit<InsertPublication, "id">) {
+export async function insertPublication(db: D1Database, data: Omit<InsertPublication, 'id'>) {
   const drizzleDb = drizzle(db, { schema });
 
   try {
@@ -162,7 +162,7 @@ export async function insertPublication(db: D1Database, data: Omit<InsertPublica
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to insert publication", {
+    throw createDbError('Failed to insert publication', {
       data,
       errorMessage: getErrorMessage(error),
     });
@@ -172,7 +172,7 @@ export async function insertPublication(db: D1Database, data: Omit<InsertPublica
 export async function updatePublication(
   db: D1Database,
   id: string,
-  data: Partial<Omit<InsertPublication, "id">>
+  data: Partial<Omit<InsertPublication, 'id'>>
 ) {
   const drizzleDb = drizzle(db, { schema });
 
@@ -205,7 +205,7 @@ export async function updatePublication(
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to update publication", {
+    throw createDbError('Failed to update publication', {
       id,
       data,
       errorMessage: getErrorMessage(error),
@@ -231,14 +231,14 @@ export async function deletePublication(db: D1Database, id: string) {
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to delete publication", {
+    throw createDbError('Failed to delete publication', {
       id,
       errorMessage: getErrorMessage(error),
     });
   }
 }
 
-export async function insertRegion(db: D1Database, data: Omit<InsertRegion, "id">) {
+export async function insertRegion(db: D1Database, data: Omit<InsertRegion, 'id'>) {
   const drizzleDb = drizzle(db, { schema });
 
   try {
@@ -264,14 +264,14 @@ export async function insertRegion(db: D1Database, data: Omit<InsertRegion, "id"
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to insert region", { data, errorMessage: getErrorMessage(error) });
+    throw createDbError('Failed to insert region', { data, errorMessage: getErrorMessage(error) });
   }
 }
 
 export async function updateRegion(
   db: D1Database,
   id: string,
-  data: Partial<Omit<InsertRegion, "id">>
+  data: Partial<Omit<InsertRegion, 'id'>>
 ) {
   const drizzleDb = drizzle(db, { schema });
 
@@ -305,7 +305,7 @@ export async function updateRegion(
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to update region", {
+    throw createDbError('Failed to update region', {
       id,
       data,
       errorMessage: getErrorMessage(error),
@@ -331,7 +331,7 @@ export async function deleteRegion(db: D1Database, id: string) {
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to delete region", { id, errorMessage: getErrorMessage(error) });
+    throw createDbError('Failed to delete region', { id, errorMessage: getErrorMessage(error) });
   }
 }
 
@@ -342,7 +342,7 @@ export async function getRegions(db: D1Database) {
     const results = await client.query.regions.findMany();
     return results;
   } catch (error: unknown) {
-    throw createDbError("Failed to get regions", { errorMessage: getErrorMessage(error) });
+    throw createDbError('Failed to get regions', { errorMessage: getErrorMessage(error) });
   }
 }
 
@@ -358,7 +358,7 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
 
     // Helper to format date to YYYY-MM-DD for comparison
     const formatDateForCompare = (date: Date | undefined): string | undefined => {
-      return date ? format(date, "yyyy-MM-dd") : undefined;
+      return date ? format(date, 'yyyy-MM-dd') : undefined;
     };
 
     // Use sql operator to convert DD/MM/YYYY to YYYY-MM-DD within the query
@@ -368,18 +368,18 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
       const startDateStr = formatDateForCompare(filters.startDate);
       if (startDateStr) {
         conditions.push(gte(normalizedDateYYYYMMDD, startDateStr));
-        console.warn("Date filtering compares DD/MM/YYYY text as YYYY-MM-DD strings.");
+        console.warn('Date filtering compares DD/MM/YYYY text as YYYY-MM-DD strings.');
       } else {
-        console.warn("Could not format startDate for comparison");
+        console.warn('Could not format startDate for comparison');
       }
     }
     if (filters?.endDate) {
       const endDateStr = formatDateForCompare(filters.endDate);
       if (endDateStr) {
         conditions.push(lte(normalizedDateYYYYMMDD, endDateStr));
-        console.warn("Date filtering compares DD/MM/YYYY text as YYYY-MM-DD strings.");
+        console.warn('Date filtering compares DD/MM/YYYY text as YYYY-MM-DD strings.');
       } else {
-        console.warn("Could not format endDate for comparison");
+        console.warn('Could not format endDate for comparison');
       }
     }
     if (filters?.publicationFilters?.category) {
@@ -405,7 +405,7 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
       } else {
         console.warn(
           `No valid regions found for names: ${filters.publicationFilters.regionNames.join(
-            ", "
+            ', '
           )}. No headlines will be returned based on this region filter.`
         );
         conditions.push(sql`${schema.headlines.id} IS NULL`);
@@ -458,19 +458,19 @@ export async function getHeadlines(db: D1Database, filters?: HeadlineFilters) {
       totalPages: Math.ceil(total / pageSize),
     };
   } catch (error: unknown) {
-    throw createDbError("Failed to get headlines", {
+    throw createDbError('Failed to get headlines', {
       filters,
       errorMessage: getErrorMessage(error),
     });
   }
 }
 
-export async function insertHeadline(db: D1Database, data: Omit<InsertHeadline, "id">) {
+export async function insertHeadline(db: D1Database, data: Omit<InsertHeadline, 'id'>) {
   const drizzleDb = drizzle(db, { schema });
 
   try {
     if (!data.publicationId) {
-      throw createDbError("Cannot insert headline without a publicationId", { data });
+      throw createDbError('Cannot insert headline without a publicationId', { data });
     }
 
     // 1. Check if publication exists using publicationId
@@ -509,7 +509,7 @@ export async function insertHeadline(db: D1Database, data: Omit<InsertHeadline, 
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to insert headline", {
+    throw createDbError('Failed to insert headline', {
       data,
       errorMessage: getErrorMessage(error),
     });
@@ -519,7 +519,7 @@ export async function insertHeadline(db: D1Database, data: Omit<InsertHeadline, 
 export async function updateHeadlineById(
   db: D1Database,
   id: string,
-  data: Partial<Omit<InsertHeadline, "id">>
+  data: Partial<Omit<InsertHeadline, 'id'>>
 ) {
   const drizzleDb = drizzle(db, { schema });
 
@@ -567,7 +567,7 @@ export async function updateHeadlineById(
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to update headline", {
+    throw createDbError('Failed to update headline', {
       id,
       data,
       errorMessage: getErrorMessage(error),
@@ -593,7 +593,7 @@ export async function deleteHeadline(db: D1Database, id: string) {
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to delete headline", { id, errorMessage: getErrorMessage(error) });
+    throw createDbError('Failed to delete headline', { id, errorMessage: getErrorMessage(error) });
   }
 }
 
@@ -622,7 +622,7 @@ export async function getHeadlineStats(
 
   // Helper to format date to YYYY-MM-DD for comparison
   const formatDateForCompare = (date: Date): string => {
-    return format(date, "yyyy-MM-dd");
+    return format(date, 'yyyy-MM-dd');
   };
 
   // Convert DD/MM/YYYY stored in normalizedDate to YYYY-MM-DD for comparison
@@ -642,7 +642,10 @@ export async function getHeadlineStats(
     const [totalResult, categoryCountsResult, publicationCountsResult, dailyCountsResult] =
       await Promise.all([
         // 1. Get total count in range
-        drizzleDb.select({ total: count() }).from(schema.headlines).where(dateCondition),
+        drizzleDb
+          .select({ total: count() })
+          .from(schema.headlines)
+          .where(dateCondition),
 
         // 2. Get counts per category
         drizzleDb
@@ -699,7 +702,7 @@ export async function getHeadlineStats(
     };
   } catch (error: unknown) {
     // Use the standard error creation helper
-    throw createDbError("Failed to get headline statistics", {
+    throw createDbError('Failed to get headline statistics', {
       startDate: startDateStr,
       endDate: endDateStr,
       errorMessage: getErrorMessage(error),
@@ -724,7 +727,7 @@ export async function getHeadlineByUrl(db: D1Database, url: string): Promise<Hea
 
     return result[0] ?? null; // Return the first result or null if none found
   } catch (error: unknown) {
-    throw createDbError("Failed to check headline existence by URL", {
+    throw createDbError('Failed to check headline existence by URL', {
       url: url,
       errorMessage: getErrorMessage(error),
     });
@@ -762,16 +765,16 @@ export async function insertSyncRun(db: D1Database, data: StartSyncRunData): Pro
         dateRangeOption: data.dateRangeOption,
         customTbs: data.customTbs,
         maxQueriesPerPublication: data.maxQueriesPerPublication,
-        status: "started", // Explicitly set status
+        status: 'started', // Explicitly set status
         // startedAt is handled by default
       })
       .returning();
     if (!newRun) {
-      throw new Error("Failed to insert sync run, no record returned.");
+      throw new Error('Failed to insert sync run, no record returned.');
     }
     return newRun;
   } catch (error: unknown) {
-    throw createDbError("Failed to insert sync run record", {
+    throw createDbError('Failed to insert sync run record', {
       data,
       errorMessage: getErrorMessage(error),
     });
@@ -802,7 +805,7 @@ export async function updateSyncRun(
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
     }
-    throw createDbError("Failed to update sync run record", {
+    throw createDbError('Failed to update sync run record', {
       runId,
       data,
       errorMessage: getErrorMessage(error),
@@ -820,7 +823,7 @@ export async function getLastSyncRun(db: D1Database): Promise<SyncRun | null> {
       .limit(1);
     return result[0] ?? null;
   } catch (error: unknown) {
-    throw createDbError("Failed to get last sync run record", {
+    throw createDbError('Failed to get last sync run record', {
       errorMessage: getErrorMessage(error),
     });
   }

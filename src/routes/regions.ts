@@ -1,29 +1,20 @@
 import { Hono } from 'hono';
-import { validator as zValidator } from 'hono-openapi/zod';
 import { describeRoute } from 'hono-openapi';
+import { validator as zValidator } from 'hono-openapi/zod';
 import { z } from 'zod';
 
-import { 
-  DeleteRegionBodySchema, 
-  InsertRegionSchema, 
-  RegionsListResponseSchema, 
-  SingleRegionResponseSchema, 
+import {
+  DeleteRegionBodySchema,
+  InsertRegionSchema,
   RegionSchema,
-  createStandardResponseSchema 
+  RegionsListResponseSchema,
+  SingleRegionResponseSchema,
+  createStandardResponseSchema,
 } from '../schema';
 
-import { 
-  deleteRegion, 
-  getRegions, 
-  insertRegion, 
-  updateRegion 
-} from '../db/queries';
+import { deleteRegion, getRegions, insertRegion, updateRegion } from '../db/queries';
 
-import { 
-  authMiddleware, 
-  handleDatabaseError, 
-  validateNonEmptyBody 
-} from '../middleware';
+import { authMiddleware, handleDatabaseError, validateNonEmptyBody } from '../middleware';
 
 // Create a router for regions
 const regionsRouter = new Hono<{ Variables: Variables; Bindings: Env }>();

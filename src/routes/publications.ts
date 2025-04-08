@@ -1,29 +1,25 @@
 import { Hono } from 'hono';
-import { validator as zValidator } from 'hono-openapi/zod';
 import { describeRoute } from 'hono-openapi';
+import { validator as zValidator } from 'hono-openapi/zod';
 import { z } from 'zod';
 
-import { 
-  DeletePublicationBodySchema, 
-  InsertPublicationSchema, 
-  PublicationsListResponseSchema, 
-  PublicationsQueryBodySchema, 
-  SinglePublicationResponseSchema, 
-  createStandardResponseSchema 
+import {
+  DeletePublicationBodySchema,
+  InsertPublicationSchema,
+  PublicationsListResponseSchema,
+  PublicationsQueryBodySchema,
+  SinglePublicationResponseSchema,
+  createStandardResponseSchema,
 } from '../schema';
 
-import { 
-  deletePublication, 
-  getPublications, 
-  insertPublication, 
-  updatePublication 
+import {
+  deletePublication,
+  getPublications,
+  insertPublication,
+  updatePublication,
 } from '../db/queries';
 
-import { 
-  authMiddleware, 
-  handleDatabaseError, 
-  validateNonEmptyBody 
-} from '../middleware';
+import { authMiddleware, handleDatabaseError, validateNonEmptyBody } from '../middleware';
 
 // Create a router for publications
 const publicationsRouter = new Hono<{ Variables: Variables; Bindings: Env }>();

@@ -90,52 +90,37 @@
       "indexes": {
         "headlines_url_unique": {
           "name": "headlines_url_unique",
-          "columns": [
-            "url"
-          ],
+          "columns": ["url"],
           "isUnique": true
         },
         "headlines_publication_id_idx": {
           "name": "headlines_publication_id_idx",
-          "columns": [
-            "publication_id"
-          ],
+          "columns": ["publication_id"],
           "isUnique": false
         },
         "headlines_normalized_date_idx": {
           "name": "headlines_normalized_date_idx",
-          "columns": [
-            "normalized_date"
-          ],
+          "columns": ["normalized_date"],
           "isUnique": false
         },
         "headlines_headline_idx": {
           "name": "headlines_headline_idx",
-          "columns": [
-            "headline"
-          ],
+          "columns": ["headline"],
           "isUnique": false
         },
         "headlines_headline_date_idx": {
           "name": "headlines_headline_date_idx",
-          "columns": [
-            "headline",
-            "normalized_date"
-          ],
+          "columns": ["headline", "normalized_date"],
           "isUnique": false
         },
         "headlines_url_idx": {
           "name": "headlines_url_idx",
-          "columns": [
-            "url"
-          ],
+          "columns": ["url"],
           "isUnique": false
         },
         "headlines_category_idx": {
           "name": "headlines_category_idx",
-          "columns": [
-            "category"
-          ],
+          "columns": ["category"],
           "isUnique": false
         }
       },
@@ -144,12 +129,8 @@
           "name": "headlines_publication_id_publications_id_fk",
           "tableFrom": "headlines",
           "tableTo": "publications",
-          "columnsFrom": [
-            "publication_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["publication_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -179,16 +160,12 @@
       "indexes": {
         "pub_regions_pub_id_idx": {
           "name": "pub_regions_pub_id_idx",
-          "columns": [
-            "publication_id"
-          ],
+          "columns": ["publication_id"],
           "isUnique": false
         },
         "pub_regions_region_id_idx": {
           "name": "pub_regions_region_id_idx",
-          "columns": [
-            "region_id"
-          ],
+          "columns": ["region_id"],
           "isUnique": false
         }
       },
@@ -197,12 +174,8 @@
           "name": "publication_regions_publication_id_publications_id_fk",
           "tableFrom": "publication_regions",
           "tableTo": "publications",
-          "columnsFrom": [
-            "publication_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["publication_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -210,22 +183,15 @@
           "name": "publication_regions_region_id_regions_id_fk",
           "tableFrom": "publication_regions",
           "tableTo": "regions",
-          "columnsFrom": [
-            "region_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["region_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "publication_regions_publication_id_region_id_pk": {
-          "columns": [
-            "publication_id",
-            "region_id"
-          ],
+          "columns": ["publication_id", "region_id"],
           "name": "publication_regions_publication_id_region_id_pk"
         }
       },
@@ -283,16 +249,12 @@
       "indexes": {
         "publications_url_idx": {
           "name": "publications_url_idx",
-          "columns": [
-            "url"
-          ],
+          "columns": ["url"],
           "isUnique": true
         },
         "publications_category_idx": {
           "name": "publications_category_idx",
-          "columns": [
-            "category"
-          ],
+          "columns": ["category"],
           "isUnique": false
         }
       },
@@ -322,9 +284,7 @@
       "indexes": {
         "regions_name_idx": {
           "name": "regions_name_idx",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         }
       },
@@ -440,23 +400,17 @@
       "indexes": {
         "sync_runs_started_at_idx": {
           "name": "sync_runs_started_at_idx",
-          "columns": [
-            "started_at"
-          ],
+          "columns": ["started_at"],
           "isUnique": false
         },
         "sync_runs_status_idx": {
           "name": "sync_runs_status_idx",
-          "columns": [
-            "status"
-          ],
+          "columns": ["status"],
           "isUnique": false
         },
         "sync_runs_trigger_type_idx": {
           "name": "sync_runs_trigger_type_idx",
-          "columns": [
-            "trigger_type"
-          ],
+          "columns": ["trigger_type"],
           "isUnique": false
         }
       },

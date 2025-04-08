@@ -1,5 +1,5 @@
-import pLimit from "p-limit";
-import type { Logger } from "pino";
+import pLimit from 'p-limit';
+import type { Logger } from 'pino';
 
 /**
  * Options for queue batch processing
@@ -28,7 +28,7 @@ export interface QueueBatchResult {
 /**
  * Sends a batch of messages to a queue with staggered delays
  * to prevent overwhelming downstream processors.
- * 
+ *
  * @param queue The Cloudflare Queue object to send messages to
  * @param payloads Array of message payloads to queue
  * @param logger Optional logger instance for detailed logging
@@ -49,7 +49,7 @@ export async function queueBatchMessages<T>(
   } = options;
 
   if (payloads.length === 0) {
-    logger?.info("No messages to queue");
+    logger?.info('No messages to queue');
     return { messagesSent: 0, messageSendErrors: 0 };
   }
 
@@ -76,7 +76,7 @@ export async function queueBatchMessages<T>(
           logger?.debug(`Sent message to queue with delay ${messageDelaySeconds}s`);
           messagesSent++;
         } catch (queueError) {
-          logger?.error("Failed to send message to queue", { error: queueError });
+          logger?.error('Failed to send message to queue', { error: queueError });
           messageSendErrors++;
         }
       })
@@ -85,8 +85,8 @@ export async function queueBatchMessages<T>(
 
   // Wait for all queue send operations to settle
   await Promise.allSettled(queueSendPromises);
-  
+
   logger?.info(`Queue operation complete. Sent: ${messagesSent}, Failed: ${messageSendErrors}`);
-  
+
   return { messagesSent, messageSendErrors };
 }

@@ -27,7 +27,7 @@ const getLoggerOptions = (env: Env): pino.LoggerOptions => {
       timestamp: pino.stdTimeFunctions.isoTime,
       enabled: true,
     };
-  } 
+  }
 
   // Development: Use pino-pretty transport (default if not production)
   return {

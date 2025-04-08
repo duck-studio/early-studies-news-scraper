@@ -11,7 +11,7 @@
 export function normalizeUrl(url: string, includeProtocol = true): string {
   // First remove any existing protocol
   const withoutProtocol = url.replace(/^https?:\/\//, '');
-  
+
   // Then add protocol if requested
   return includeProtocol ? `https://${withoutProtocol}` : withoutProtocol;
 }

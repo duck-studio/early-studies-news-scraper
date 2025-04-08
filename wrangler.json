@@ -2,9 +2,7 @@
   "name": "early-studies-api",
   "main": "src/index.ts",
   "compatibility_date": "2025-04-04",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
     {
       "binding": "DB",
@@ -13,7 +11,7 @@
       "migrations_dir": "src/db/migrations"
     }
   ],
- "observability": {
+  "observability": {
     "enabled": true,
     "head_sampling_rate": 1
   },
@@ -41,12 +39,10 @@
       }
     ]
   },
-  "ai": 
-    {
-      "binding": "AI"
-    }
-  ,
+  "ai": {
+    "binding": "AI"
+  },
   "triggers": {
     "crons": ["0 0 * * *"]
   }
-} 
+}

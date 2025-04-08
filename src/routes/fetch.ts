@@ -1,7 +1,7 @@
-import { Hono } from "hono";
-import { describeRoute } from "hono-openapi";
-import { validator as zValidator } from "hono-openapi/zod";
-import { z } from "zod";
+import { Hono } from 'hono';
+import { describeRoute } from 'hono-openapi';
+import { validator as zValidator } from 'hono-openapi/zod';
+import { z } from 'zod';
 
 import {
   HeadlinesFetchRequestSchema,
@@ -9,18 +9,18 @@ import {
   HeadlinesFetchSummary,
   TransformedNewsItem,
   createStandardResponseSchema,
-} from "../schema";
+} from '../schema';
 
-import { getPublications, insertPublication } from "../db/queries";
+import { getPublications, insertPublication } from '../db/queries';
 
-import { authMiddleware } from "../middleware";
+import { authMiddleware } from '../middleware';
 
-import { fetchAllPagesForUrl, publicationLimit } from "../services/serper";
+import { fetchAllPagesForUrl, publicationLimit } from '../services/serper';
 
-import { getDateRange, parseSerperDate } from "../utils/date/parsers";
-import { getGeoParams, getTbsString } from "../utils/date/search-params";
-import { normalizeUrl } from "../utils/url";
-import { queueBatchMessages } from "../services/queue";
+import { queueBatchMessages } from '../services/queue';
+import { parseSerperDate } from '../utils/date/parsers';
+import { datesToTbsString, getGeoParams } from '../utils/date/search-params';
+import { normalizeUrl } from '../utils/url';
 
 // Type for workflow item params
 type ProcessNewsItemParams = {
@@ -38,84 +38,84 @@ const fetchRouter = new Hono<{ Variables: Variables; Bindings: Env }>();
 
 // Fetch headlines endpoint
 fetchRouter.post(
-  "/headlines/fetch",
+  '/headlines/fetch',
   authMiddleware,
   describeRoute({
-    description: "Fetch news headlines from one or more publications via Serper API",
-    tags: ["Headlines Fetcher"],
+    description: 'Fetch news headlines from one or more publications via Serper API',
+    tags: ['Headlines Fetcher'],
     security: [{ bearerAuth: [] }],
     requestBody: {
       content: {
-        "application/json": {
+        'application/json': {
           schema: HeadlinesFetchRequestSchema,
         },
       },
     },
     responses: {
       200: {
-        description: "Successful fetch operation",
+        description: 'Successful fetch operation',
         content: {
-          "application/json": {
+          'application/json': {
             schema: HeadlinesFetchStdResponseSchema,
           },
         },
       },
       400: {
-        description: "Bad Request",
+        description: 'Bad Request',
         content: {
-          "application/json": {
-            schema: createStandardResponseSchema(z.null(), "ErrorResponse400_HdlFetch"),
+          'application/json': {
+            schema: createStandardResponseSchema(z.null(), 'ErrorResponse400_HdlFetch'),
           },
         },
       },
       401: {
-        description: "Unauthorized",
+        description: 'Unauthorized',
         content: {
-          "application/json": {
-            schema: createStandardResponseSchema(z.null(), "ErrorResponse401_HdlFetch"),
+          'application/json': {
+            schema: createStandardResponseSchema(z.null(), 'ErrorResponse401_HdlFetch'),
           },
         },
       },
       403: {
-        description: "Forbidden",
+        description: 'Forbidden',
         content: {
-          "application/json": {
-            schema: createStandardResponseSchema(z.null(), "ErrorResponse403_HdlFetch"),
+          'application/json': {
+            schema: createStandardResponseSchema(z.null(), 'ErrorResponse403_HdlFetch'),
           },
         },
       },
       500: {
-        description: "Internal Server Error / Fetch Error",
+        description: 'Internal Server Error / Fetch Error',
         content: {
-          "application/json": {
-            schema: createStandardResponseSchema(z.null(), "ErrorResponse500_HdlFetch"),
+          'application/json': {
+            schema: createStandardResponseSchema(z.null(), 'ErrorResponse500_HdlFetch'),
           },
         },
       },
     },
   }),
-  zValidator("json", HeadlinesFetchRequestSchema),
+  zValidator('json', HeadlinesFetchRequestSchema),
   async (c) => {
     const {
-      dateRangeOption,
-      customTbs,
+      startDate,
+      endDate,
       region,
       publicationUrls: requestedPublicationUrls,
       maxQueriesPerPublication,
       flattenResults,
       triggerWorkflow,
-    } = c.req.valid("json");
-    const logger = c.get("logger");
+    } = c.req.valid('json');
+    const logger = c.get('logger');
 
     // --- Environment Checks ---
     if (!c.env.SERPER_API_KEY) {
-      const error = new Error("SERPER_API_KEY environment variable is not set");
-      logger.error("Environment configuration error", { error });
+      const error = new Error('SERPER_API_KEY environment variable is not set');
+      logger.error('Environment configuration error', { error });
       return c.json(
         {
           data: null,
           success: false,
-          error: { message: "Server configuration error: API key missing.", code: "CONFIG_ERROR" },
+          error: { message: 'Server configuration error: API key missing.', code: 'CONFIG_ERROR' },
         },
         500
       );
@@ -124,15 +124,15 @@ fetchRouter.post(
     // Check queue binding only if workflow trigger is requested
     if (triggerWorkflow && !c.env.NEWS_ITEM_QUEUE) {
       logger.error(
-        "Environment configuration error: NEWS_ITEM_QUEUE binding missing for workflow trigger."
+        'Environment configuration error: NEWS_ITEM_QUEUE binding missing for workflow trigger.'
       );
       return c.json(
         {
           data: null,
           success: false,
           error: {
-            message: "Server configuration error: Queue binding missing.",
-            code: "CONFIG_ERROR",
+            message: 'Server configuration error: Queue binding missing.',
+            code: 'CONFIG_ERROR',
           },
         },
         500
@@ -140,50 +140,35 @@ fetchRouter.post(
     }
 
     // --- Log triggerWorkflow status ---
-    logger.debug("Workflow trigger status", { triggerWorkflow });
+    logger.debug('Workflow trigger status', { triggerWorkflow });
 
-    // --- Date Range Determination ---
-    let _filterDateRange: { start: Date; end: Date };
-    try {
-      // Get date range - simplified to use the standard date range method
-      _filterDateRange = getDateRange(dateRangeOption);
-    } catch (e) {
-      logger.error("Error determining filter date range", { error: e });
-      c.status(500);
-      return c.json({
-        data: null,
-        success: false,
-        error: {
-          message: "Internal server error determining date range.",
-          code: "DATE_RANGE_ERROR",
-        },
-      });
-    }
+    // Log the supplied date range
+    logger.debug('Using date range', { startDate, endDate });
 
-    // Get the tbs string for Serper
-    const serperTbs = getTbsString(dateRangeOption, customTbs);
+    // Get the tbs string for Serper from startDate and endDate
+    const serperTbs = datesToTbsString(startDate, endDate);
 
     // --- Fetch Publication IDs if triggering workflow ---
     const publicationUrlToIdMap = new Map<string, string>();
     if (triggerWorkflow) {
       try {
-        logger.debug("TriggerWorkflow is true, fetching publications for ID mapping.");
+        logger.debug('TriggerWorkflow is true, fetching publications for ID mapping.');
         const publications = await getPublications(c.env.DB); // Fetch all publications
         if (publications && publications.length > 0) {
           for (const pub of publications) {
             // Map the *clean* URL (without https://) to its ID for consistency
             if (pub.id && pub.url) {
-              const cleanUrl = pub.url.replace(/^https?:\/\//, "");
+              const cleanUrl = pub.url.replace(/^https?:\/\//, '');
               publicationUrlToIdMap.set(cleanUrl, pub.id);
             }
           }
           logger.info(`Mapped ${publicationUrlToIdMap.size} publications for workflow trigger.`);
         } else {
-          logger.warn("No publications found in DB for ID mapping. Workflows cannot be triggered.");
+          logger.warn('No publications found in DB for ID mapping. Workflows cannot be triggered.');
         }
       } catch (dbError) {
         logger.error(
-          "Failed to fetch publications for ID mapping. Workflows cannot be triggered.",
+          'Failed to fetch publications for ID mapping. Workflows cannot be triggered.',
           { dbError }
         );
       }
@@ -202,7 +187,9 @@ fetchRouter.post(
         );
 
       // Ensure requested URLs have https:// before fetching
-      const publicationUrlsWithHttps = requestedPublicationUrls.map(url => normalizeUrl(url, true));
+      const publicationUrlsWithHttps = requestedPublicationUrls.map((url) =>
+        normalizeUrl(url, true)
+      );
 
       const publicationPromises = publicationUrlsWithHttps.map((url) =>
         publicationLimit(() => fetchPublicationWithLimit(url))
@@ -214,7 +201,7 @@ fetchRouter.post(
 
           if (result.error) {
             return {
-              status: "rejected",
+              status: 'rejected',
               url: result.url, // The URL that failed (with https://)
               queriesMade: result.queriesMade,
               creditsConsumed: result.credits,
@@ -225,7 +212,7 @@ fetchRouter.post(
 
           // Transform results immediately after fetch
           return {
-            status: "fulfilled",
+            status: 'fulfilled',
             url: result.url, // Keep the URL used for fetching (with https://)
             queriesMade: result.queriesMade,
             creditsConsumed: result.credits,
@@ -238,7 +225,7 @@ fetchRouter.post(
                 snippet: item.snippet ?? null, // Ensure null if undefined
                 source: item.source,
                 rawDate: item.date ?? null, // Ensure null if undefined
-                normalizedDate: parsedDate ? parsedDate.toLocaleDateString("en-GB") : undefined,
+                normalizedDate: parsedDate ? parsedDate.toLocaleDateString('en-GB') : undefined,
               };
             }),
           };
@@ -250,7 +237,7 @@ fetchRouter.post(
       const itemsToQueue: ProcessNewsItemParams[] = [];
 
       for (const result of results) {
-        if (result.status === "fulfilled") {
+        if (result.status === 'fulfilled') {
           // Process the results from this publication URL
 
           // Date filtering is simplified here as we don't do advanced filtering
@@ -262,7 +249,7 @@ fetchRouter.post(
           // If triggering workflow, prepare items for queuing
           if (triggerWorkflow) {
             // Get the publication URL *without* https:// to match the map key
-            const keyUrl = result.url.replace(/^https?:\/\//, "");
+            const keyUrl = result.url.replace(/^https?:\/\//, '');
             let publicationId = publicationUrlToIdMap.get(keyUrl);
 
             // If publication ID not found, try to create it
@@ -278,12 +265,12 @@ fetchRouter.post(
                 if (newPublication?.id) {
                   publicationId = newPublication.id;
                   publicationUrlToIdMap.set(keyUrl, publicationId);
-                  logger.info("Successfully created new publication", {
+                  logger.info('Successfully created new publication', {
                     keyUrl,
                     newId: publicationId,
                   });
                 } else {
-                  logger.error("Failed to create publication or retrieve ID after insert", {
+                  logger.error('Failed to create publication or retrieve ID after insert', {
                     keyUrl,
                   });
                   publicationId = undefined;
@@ -322,35 +309,35 @@ fetchRouter.post(
       // --- Send Messages to Queue if requested ---
       let messagesSent = 0;
       let _messageSendErrors = 0;
-      
+
       if (triggerWorkflow && itemsToQueue.length > 0) {
-        logger.info(`Attempting to queue ${itemsToQueue.length} headlines for workflow processing.`);
-        
-        const result = await queueBatchMessages(
-          c.env.NEWS_ITEM_QUEUE,
-          itemsToQueue,
-          logger,
-          { concurrency: 50, delayIncrementBatch: 10, delayIncrementSeconds: 1 }
+        logger.info(
+          `Attempting to queue ${itemsToQueue.length} headlines for workflow processing.`
         );
-        
+
+        const result = await queueBatchMessages(c.env.NEWS_ITEM_QUEUE, itemsToQueue, logger, {
+          concurrency: 50,
+          delayIncrementBatch: 10,
+          delayIncrementSeconds: 1,
+        });
+
         messagesSent = result.messagesSent;
         _messageSendErrors = result.messageSendErrors;
-        
       } else if (triggerWorkflow) {
         logger.info(
-          "TriggerWorkflow was true, but no eligible headlines found/mapped to queue after filtering."
+          'TriggerWorkflow was true, but no eligible headlines found/mapped to queue after filtering.'
         );
       }
 
       // --- Prepare Summary and Final Results ---
       const totalResultsAfterFiltering = results.reduce(
-        (acc, curr) => acc + (curr.status === "fulfilled" ? curr.results.length : 0),
+        (acc, curr) => acc + (curr.status === 'fulfilled' ? curr.results.length : 0),
         0
       );
       const totalCreditsConsumed = results.reduce((acc, curr) => acc + curr.creditsConsumed, 0);
       const totalQueriesMade = results.reduce((acc, curr) => acc + curr.queriesMade, 0);
-      const successCount = results.filter((r) => r.status === "fulfilled").length;
-      const failureCount = results.filter((r) => r.status === "rejected").length;
+      const successCount = results.filter((r) => r.status === 'fulfilled').length;
+      const failureCount = results.filter((r) => r.status === 'rejected').length;
 
       // Build the summary object
       const summary: HeadlinesFetchSummary = {
@@ -363,13 +350,13 @@ fetchRouter.post(
         ...(triggerWorkflow && { workflowsQueued: messagesSent }),
       };
 
-      logger.info("Search /headlines/fetch completed", {
+      logger.info('Search /headlines/fetch completed', {
         ...summary,
       });
 
       // Handle flattenResults - needs to operate on the filtered results
       const finalResults = flattenResults
-        ? results.flatMap((r) => (r.status === "fulfilled" ? r.results : [])) // Flatten only successful
+        ? results.flatMap((r) => (r.status === 'fulfilled' ? r.results : [])) // Flatten only successful
         : results; // Return grouped results (including failures)
 
       // Return the final response
@@ -386,14 +373,14 @@ fetchRouter.post(
       );
     } catch (error) {
       // Handle generic fetch/processing errors
-      logger.error("Search failed in /headlines/fetch", { error });
+      logger.error('Search failed in /headlines/fetch', { error });
       return c.json(
         {
           data: null,
           success: false,
           error: {
-            message: "Failed to fetch news articles",
-            code: "FETCH_FAILED",
+            message: 'Failed to fetch news articles',
+            code: 'FETCH_FAILED',
             details: error instanceof Error ? error.message : String(error),
           },
         },

@@ -8,7 +8,7 @@ import {
   subSeconds,
   subWeeks,
   subYears,
-} from "date-fns";
+} from 'date-fns';
 
 /**
  * Maps date range option to a date range with start and end dates
@@ -18,19 +18,19 @@ export function getDateRange(dateRangeOption: string): { start: Date; end: Date 
   let startDate: Date;
 
   switch (dateRangeOption) {
-    case "Past Hour":
+    case 'Past Hour':
       startDate = subHours(now, 1);
       break;
-    case "Past 24 Hours":
+    case 'Past 24 Hours':
       startDate = subDays(now, 1);
       break;
-    case "Past Month":
+    case 'Past Month':
       startDate = subMonths(now, 1);
       break;
-    case "Past Year":
+    case 'Past Year':
       startDate = subYears(now, 1);
       break;
-    case "Custom":
+    case 'Custom':
       startDate = subWeeks(now, 1);
       break;
     default:
@@ -46,9 +46,9 @@ export function getDateRange(dateRangeOption: string): { start: Date; end: Date 
  */
 export function parseDdMmYyyy(dateString?: string): Date | undefined {
   if (!dateString) return undefined;
-  
+
   try {
-    const parsed = parse(dateString, "dd/MM/yyyy", new Date());
+    const parsed = parse(dateString, 'dd/MM/yyyy', new Date());
     if (Number.isNaN(parsed.getTime())) {
       return undefined;
     }
@@ -66,12 +66,12 @@ export function parseMmDdYyyy(dateString?: string | null): Date | undefined {
   if (!dateString) {
     return undefined;
   }
-  
-  const parts = dateString.split("/");
+
+  const parts = dateString.split('/');
   if (parts.length !== 3) {
     return undefined;
   }
-  
+
   const month = parseInt(parts[0], 10);
   const day = parseInt(parts[1], 10);
   const year = parseInt(parts[2], 10);
@@ -113,30 +113,37 @@ export function parseSerperDate(dateString?: string | null): Date | null {
     const relativeMatch = dateString.match(
       /(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago/i
     );
-    
+
     if (relativeMatch) {
       const value = parseInt(relativeMatch[1], 10);
       const unit = relativeMatch[2].toLowerCase();
-      
+
       switch (unit) {
-        case "second": return subSeconds(now, value);
-        case "minute": return subMinutes(now, value);
-        case "hour": return subHours(now, value);
-        case "day": return subDays(now, value);
-        case "week": return subWeeks(now, value);
-        case "month": return subMonths(now, value);
-        case "year": return subYears(now, value);
+        case 'second':
+          return subSeconds(now, value);
+        case 'minute':
+          return subMinutes(now, value);
+        case 'hour':
+          return subHours(now, value);
+        case 'day':
+          return subDays(now, value);
+        case 'week':
+          return subWeeks(now, value);
+        case 'month':
+          return subMonths(now, value);
+        case 'year':
+          return subYears(now, value);
       }
     }
 
     // Try parsing absolute format "DD MMM YYYY" (e.g., "25 Aug 2024")
-    let parsedDate = parse(dateString, "d MMM yyyy", now);
+    let parsedDate = parse(dateString, 'd MMM yyyy', now);
     if (isValid(parsedDate)) {
       return parsedDate;
     }
 
     // Try parsing absolute format "MMM DD, YYYY" (e.g., "Aug 25, 2024")
-    parsedDate = parse(dateString, "MMM d, yyyy", now);
+    parsedDate = parse(dateString, 'MMM d, yyyy', now);
     if (isValid(parsedDate)) {
       return parsedDate;
     }

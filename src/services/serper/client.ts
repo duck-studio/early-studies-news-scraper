@@ -1,10 +1,7 @@
 import retry from 'async-retry';
 import type { Logger } from 'pino';
 import { config } from '../../config';
-import type {
-  SerperNewsResult,
-  GeoParams
-} from '../../schema';
+import type { GeoParams, SerperNewsResult } from '../../schema';
 
 /**
  * Fetches a single page of news results from the Serper API for a given site query
@@ -30,13 +27,16 @@ export async function fetchSerperPage(
     num: config.resultsPerPage,
     page: page,
   };
-  
+
   const requestBody = JSON.stringify(requestPayload);
-  
-  logger.debug({ 
-    url: config.serperApiUrl,
-    payload: requestPayload 
-  }, 'Serper API request');
+
+  logger.debug(
+    {
+      url: config.serperApiUrl,
+      payload: requestPayload,
+    },
+    'Serper API request'
+  );
 
   const requestOptions: RequestInit = {
     method: 'POST',
@@ -72,17 +72,23 @@ export async function fetchSerperPage(
           throw error;
         }
 
-        const result = await response.json() as SerperNewsResult;
-        
-        attemptLogger.debug({
-          resultCount: result.news?.length ?? 0, 
-          credits: result.credits,
-          parameters: result.searchParameters
-        }, 'Serper API response received');
-        
+        const result = (await response.json()) as SerperNewsResult;
+
+        attemptLogger.debug(
+          {
+            resultCount: result.news?.length ?? 0,
+            credits: result.credits,
+            parameters: result.searchParameters,
+          },
+          'Serper API response received'
+        );
+
         return result;
       } catch (error: unknown) {
-        attemptLogger.warn({ err: error }, 'Serper API fetch attempt failed, retrying if possible...');
+        attemptLogger.warn(
+          { err: error },
+          'Serper API fetch attempt failed, retrying if possible...'
+        );
         throw error;
       }
     },

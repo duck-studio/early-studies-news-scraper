@@ -1,5 +1,5 @@
-import { subDays, subHours, subMonths, subWeeks, subYears } from "date-fns";
-import { parseMmDdYyyy } from "./parsers";
+import { subDays, subHours, subMonths, subWeeks, subYears } from 'date-fns';
+import { parseMmDdYyyy } from './parsers';
 
 /**
  * Convert TBS (time-based search) parameter to a date range
@@ -10,19 +10,19 @@ export function tbsToDateRange(tbs: string): { start: Date; end: Date } {
 
   // Handle known 'qdr:' values first
   switch (tbs) {
-    case "qdr:h": // Past Hour
+    case 'qdr:h': // Past Hour
       startDate = subHours(endDate, 1);
       break;
-    case "qdr:d": // Past 24 Hours (Day)
+    case 'qdr:d': // Past 24 Hours (Day)
       startDate = subDays(endDate, 1);
       break;
-    case "qdr:w": // Past Week
+    case 'qdr:w': // Past Week
       startDate = subWeeks(endDate, 1);
       break;
-    case "qdr:m": // Past Month
+    case 'qdr:m': // Past Month
       startDate = subMonths(endDate, 1);
       break;
-    case "qdr:y": // Past Year
+    case 'qdr:y': // Past Year
       startDate = subYears(endDate, 1);
       break;
     default:

@@ -5,7 +5,7 @@ export const config = {
 
   /** Number of results to request per Serper API page. Max is often 100. */
   resultsPerPage: 100,
-  
+
   /** Maximum total results to fetch per publication (safety limit) */
   maxResultsPerPublication: 300,
 
@@ -19,5 +19,5 @@ export const config = {
     minTimeout: 1000, // Minimum delay between retries (ms)
     maxTimeout: 5000, // Maximum delay between retries (ms)
     randomize: true, // Add jitter to delays
-  }
+  },
 };

@@ -1,8 +1,8 @@
 // Use types from worker-configuration.d.ts
-import { createLogger } from "./logger";
-import { createAppRouter } from "./routes";
-import { performHeadlineSync } from "./routes/sync";
-import { ProcessNewsItemParams, ProcessNewsItemWorkflow } from "./workflows";
+import { createLogger } from './logger';
+import { createAppRouter } from './routes';
+import { performHeadlineSync } from './routes/sync';
+import { ProcessNewsItemParams, ProcessNewsItemWorkflow } from './workflows';
 
 /**
  * Main application export for Cloudflare Workers
@@ -19,9 +19,9 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
-          await performHeadlineSync(env, logger, "scheduled", "Past 24 Hours", undefined, 5);
+          await performHeadlineSync(env, logger, 'scheduled', 'Past 24 Hours', 'Past 24 Hours', 5);
         } catch (error) {
-          logger.error("Scheduled headline sync failed.", { error });
+          logger.error('Scheduled headline sync failed.', { error });
         }
       })()
     );
@@ -39,7 +39,7 @@ export default {
     // Check for necessary bindings
     if (!env.PROCESS_NEWS_ITEM_WORKFLOW) {
       logger.error(
-        "Queue Handler Error: PROCESS_NEWS_ITEM_WORKFLOW binding missing. Cannot process batch."
+        'Queue Handler Error: PROCESS_NEWS_ITEM_WORKFLOW binding missing. Cannot process batch.'
       );
       batch.retryAll();
       return;

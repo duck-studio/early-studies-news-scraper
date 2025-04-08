@@ -1,9 +1,9 @@
 import { Context, Next } from 'hono';
 import { StatusCode } from 'hono/utils/http-status';
-import { z } from 'zod';
-import { StandardErrorSchema } from '../schema';
-import { DatabaseError } from '../db/queries';
 import { Logger } from 'pino';
+import { z } from 'zod';
+import { DatabaseError } from '../db/queries';
+import { StandardErrorSchema } from '../schema';
 import { parseDdMmYyyy } from '../utils/date/parsers';
 
 export function handleDatabaseError(
@@ -71,12 +71,17 @@ export function validateNonEmptyBody() {
   };
 }
 
-export function createApiResponse<T>(data: T | null, success: boolean, error: unknown = null, status = 200) {
+export function createApiResponse<T>(
+  data: T | null,
+  success: boolean,
+  error: unknown = null,
+  status = 200
+) {
   return {
     data,
     success,
     error,
-    status
+    status,
   };
 }
 
@@ -98,7 +103,7 @@ export function validateAndParseDateRange(
     });
     return null;
   }
-  
+
   if (body.endDate && !endDate) {
     logger.warn('Invalid end date format provided:', { endDate: body.endDate });
     c.status(400);

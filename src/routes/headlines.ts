@@ -1,29 +1,24 @@
 import { Hono } from 'hono';
-import { validator as zValidator } from 'hono-openapi/zod';
 import { describeRoute } from 'hono-openapi';
+import { validator as zValidator } from 'hono-openapi/zod';
 import { z } from 'zod';
 
-import { 
-  DeleteHeadlineBodySchema, 
-  HeadlinesQueryBodySchema, 
-  HeadlinesQueryStdResponseSchema, 
-  InsertHeadlineSchema, 
-  SingleHeadlineResponseSchema, 
-  createStandardResponseSchema 
+import {
+  DeleteHeadlineBodySchema,
+  HeadlinesQueryBodySchema,
+  HeadlinesQueryStdResponseSchema,
+  InsertHeadlineSchema,
+  SingleHeadlineResponseSchema,
+  createStandardResponseSchema,
 } from '../schema';
 
-import { 
-  getHeadlines, 
-  deleteHeadline,
-  insertHeadline, 
-  updateHeadlineById 
-} from '../db/queries';
+import { deleteHeadline, getHeadlines, insertHeadline, updateHeadlineById } from '../db/queries';
 
-import { 
-  authMiddleware, 
-  handleDatabaseError, 
-  validateNonEmptyBody, 
-  validateAndParseDateRange 
+import {
+  authMiddleware,
+  handleDatabaseError,
+  validateAndParseDateRange,
+  validateNonEmptyBody,
 } from '../middleware';
 
 // Create a router for headlines
@@ -79,7 +74,7 @@ headlinesRouter.post(
     if (parsedDates === null) {
       return c.res; // Response already set by the helper
     }
-    
+
     // Destructure potentially undefined dates
     const { startDate, endDate } = parsedDates;
 

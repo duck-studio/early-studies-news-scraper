@@ -5,7 +5,6 @@ import { Logger } from 'pino';
  * Note: Env types come from worker-configuration.d.ts
  */
 declare global {
-
   /**
    * Variables available in Hono context
    */
@@ -27,4 +26,3 @@ export type ProcessNewsItemParams = {
   rawDate: string | null;
   normalizedDate: string | null;
 };
-
