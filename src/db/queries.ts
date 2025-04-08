@@ -128,13 +128,31 @@ export async function getPublications(db: D1Database, filters?: PublicationFilte
 
     const whereCondition = conditions.length > 0 ? and(...conditions) : undefined;
 
+    // Fetch publications with their regions through the join
     const results = await client.query.publications.findMany({
       where: whereCondition,
       with: {
-        publicationRegions: true,
+        publicationRegions: {
+          with: {
+            region: true, // Include the complete region information
+          },
+        },
       },
     });
-    return results;
+
+    // Transform the results to include an array of region names
+    return results.map((publication) => {
+      const regions = publication.publicationRegions.map((pr) => pr.region.name);
+
+      // Create a new object without the publicationRegions property
+      const { publicationRegions: _, ...publicationData } = publication;
+
+      // Return the modified publication with regions array
+      return {
+        ...publicationData,
+        regions, // Array of region names like ["UK", "US"]
+      };
+    });
   } catch (error: unknown) {
     throw createDbError('Failed to get publications', {
       filters,
