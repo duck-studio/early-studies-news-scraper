@@ -1,1 +1,0 @@
-ALTER TABLE `sync_runs` DROP COLUMN `summary_workflow_errors`;
