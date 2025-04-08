@@ -185,60 +185,57 @@ export async function insertPublication(db: D1Database, data: PublicationWithReg
       );
     }
 
-    // Start a transaction to insert publication and regions
-    return await drizzleDb.transaction(async (tx) => {
-      // Insert the publication
-      const [publication] = await tx
-        .insert(schema.publications)
-        .values(publicationData) // Drizzle handles default ID
-        .returning();
+    // Insert the publication
+    const [publication] = await drizzleDb
+      .insert(schema.publications)
+      .values(publicationData) // Drizzle handles default ID
+      .returning();
 
-      // If regions were provided, associate them with the publication
-      if (regions && regions.length > 0) {
-        // Find region IDs for the provided region names
-        const regionRecords = await tx
-          .select()
-          .from(schema.regions)
-          .where(inArray(schema.regions.name, regions));
+    // If regions were provided, associate them with the publication
+    if (regions && regions.length > 0) {
+      // Find region IDs for the provided region names
+      const regionRecords = await drizzleDb
+        .select()
+        .from(schema.regions)
+        .where(inArray(schema.regions.name, regions));
 
-        // If any regions were found, create associations
-        if (regionRecords.length > 0) {
-          const publicationRegions = regionRecords.map((region) => ({
-            publicationId: publication.id,
-            regionId: region.id,
-          }));
+      // If any regions were found, create associations
+      if (regionRecords.length > 0) {
+        const publicationRegions = regionRecords.map((region) => ({
+          publicationId: publication.id,
+          regionId: region.id,
+        }));
 
-          // Insert associations into the junction table
-          await tx.insert(schema.publicationRegions).values(publicationRegions);
-        }
+        // Insert associations into the junction table
+        await drizzleDb.insert(schema.publicationRegions).values(publicationRegions);
       }
+    }
 
-      // Get the full publication with regions
-      const result = await tx.query.publications.findFirst({
-        where: eq(schema.publications.id, publication.id),
-        with: {
-          publicationRegions: {
-            with: {
-              region: true,
-            },
+    // Get the full publication with regions
+    const result = await drizzleDb.query.publications.findFirst({
+      where: eq(schema.publications.id, publication.id),
+      with: {
+        publicationRegions: {
+          with: {
+            region: true,
           },
         },
-      });
-
-      // Transform the result to include region names
-      if (result) {
-        const regionNames = result.publicationRegions.map((pr) => pr.region.name);
-        const { publicationRegions: _, ...pubData } = result;
-        return [
-          {
-            ...pubData,
-            regions: regionNames,
-          },
-        ];
-      }
-
-      return [publication];
+      },
     });
+
+    // Transform the result to include region names
+    if (result) {
+      const regionNames = result.publicationRegions.map((pr) => pr.region.name);
+      const { publicationRegions: _, ...pubData } = result;
+      return [
+        {
+          ...pubData,
+          regions: regionNames,
+        },
+      ];
+    }
+
+    return [publication];
   } catch (error: unknown) {
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
@@ -279,73 +276,70 @@ export async function updatePublication(
       }
     }
 
-    // Start a transaction to update publication and regions
-    return await drizzleDb.transaction(async (tx) => {
-      // Update the publication
-      const updatedRows = await tx
-        .update(schema.publications)
-        .set({ ...publicationData, updatedAt: new Date() })
-        .where(eq(schema.publications.id, id))
-        .returning();
+    // Update the publication
+    const updatedRows = await drizzleDb
+      .update(schema.publications)
+      .set({ ...publicationData, updatedAt: new Date() })
+      .where(eq(schema.publications.id, id))
+      .returning();
 
-      if (updatedRows.length === 0) {
-        throw createDbError(`Publication with ID ${id} not found for update.`, { id });
-      }
+    if (updatedRows.length === 0) {
+      throw createDbError(`Publication with ID ${id} not found for update.`, { id });
+    }
 
-      // If regions were provided, update the associations
-      if (regions !== undefined) {
-        // First remove all existing associations
-        await tx
-          .delete(schema.publicationRegions)
-          .where(eq(schema.publicationRegions.publicationId, id));
+    // If regions were provided, update the associations
+    if (regions !== undefined) {
+      // First remove all existing associations
+      await drizzleDb
+        .delete(schema.publicationRegions)
+        .where(eq(schema.publicationRegions.publicationId, id));
 
-        // If there are new regions to add, create associations
-        if (regions.length > 0) {
-          // Find region IDs for the provided region names
-          const regionRecords = await tx
-            .select()
-            .from(schema.regions)
-            .where(inArray(schema.regions.name, regions));
+      // If there are new regions to add, create associations
+      if (regions.length > 0) {
+        // Find region IDs for the provided region names
+        const regionRecords = await drizzleDb
+          .select()
+          .from(schema.regions)
+          .where(inArray(schema.regions.name, regions));
 
-          // If any regions were found, create associations
-          if (regionRecords.length > 0) {
-            const publicationRegions = regionRecords.map((region) => ({
-              publicationId: id,
-              regionId: region.id,
-            }));
+        // If any regions were found, create associations
+        if (regionRecords.length > 0) {
+          const publicationRegions = regionRecords.map((region) => ({
+            publicationId: id,
+            regionId: region.id,
+          }));
 
-            // Insert associations into the junction table
-            await tx.insert(schema.publicationRegions).values(publicationRegions);
-          }
+          // Insert associations into the junction table
+          await drizzleDb.insert(schema.publicationRegions).values(publicationRegions);
         }
       }
+    }
 
-      // Get the full publication with regions
-      const result = await tx.query.publications.findFirst({
-        where: eq(schema.publications.id, id),
-        with: {
-          publicationRegions: {
-            with: {
-              region: true,
-            },
+    // Get the full publication with regions
+    const result = await drizzleDb.query.publications.findFirst({
+      where: eq(schema.publications.id, id),
+      with: {
+        publicationRegions: {
+          with: {
+            region: true,
           },
         },
-      });
-
-      // Transform the result to include region names
-      if (result) {
-        const regionNames = result.publicationRegions.map((pr) => pr.region.name);
-        const { publicationRegions: _, ...pubData } = result;
-        return [
-          {
-            ...pubData,
-            regions: regionNames,
-          },
-        ];
-      }
-
-      return updatedRows;
+      },
     });
+
+    // Transform the result to include region names
+    if (result) {
+      const regionNames = result.publicationRegions.map((pr) => pr.region.name);
+      const { publicationRegions: _, ...pubData } = result;
+      return [
+        {
+          ...pubData,
+          regions: regionNames,
+        },
+      ];
+    }
+
+    return updatedRows;
   } catch (error: unknown) {
     if (isDatabaseError(error)) {
       throw error; // Re-throw our custom errors
