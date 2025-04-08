@@ -11,6 +11,7 @@ import fetchRouter from './fetch';
 import headlinesRouter from './headlines';
 import publicationsRouter from './publications';
 import regionsRouter from './regions';
+import serperRouter from './serper';
 import settingsRouter from './settings';
 import statsRouter from './stats';
 import syncRouter from './sync';
@@ -103,6 +104,7 @@ export function createAppRouter() {
   app.route('/headlines', headlinesRouter);
   app.route('/settings', settingsRouter);
   app.route('/stats', statsRouter);
+  app.route('/serper', serperRouter);
   app.route('/', fetchRouter); // Routes like /headlines/fetch
   app.route('/sync', syncRouter);
 
@@ -168,6 +170,7 @@ export {
   headlinesRouter,
   publicationsRouter,
   regionsRouter,
+  serperRouter,
   settingsRouter,
   syncRouter,
   statsRouter,

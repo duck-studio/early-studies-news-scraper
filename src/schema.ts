@@ -268,6 +268,13 @@ export type FetchAllPagesResult = {
   credits: number;
   results: SerperNewsItem[];
   error?: Error;
+  tbsParams?: string;
+};
+
+export type SerperAccountDetails = {
+  balance: number;
+  rateLimit: number;
+  apiKey?: string;
 };
 
 export type GeoParams = {
