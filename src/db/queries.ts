@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { datesToTbsString } from '../utils/date/search-params';
+import { normalizeUrl } from '../utils/url';
 import {
   headlineCategories,
   publicationCategories,
@@ -170,25 +171,31 @@ export async function insertPublication(db: D1Database, data: PublicationWithReg
   const drizzleDb = drizzle(db, { schema });
   const { regions, ...publicationData } = data;
 
+  // Normalize the URL by removing the protocol
+  const normalizedData = {
+    ...publicationData,
+    url: normalizeUrl(publicationData.url, false), // false = remove protocol
+  };
+
   try {
     // Check if publication URL already exists (URL should still be unique)
     const existing = await drizzleDb
       .select({ id: schema.publications.id })
       .from(schema.publications)
-      .where(eq(schema.publications.url, data.url))
+      .where(eq(schema.publications.url, normalizedData.url))
       .limit(1);
 
     if (existing.length > 0) {
       throw createDbError(
-        `Publication with URL ${data.url} already exists (ID: ${existing[0].id}).`,
-        { url: data.url, existingId: existing[0].id }
+        `Publication with URL ${normalizedData.url} already exists (ID: ${existing[0].id}).`,
+        { url: normalizedData.url, existingId: existing[0].id }
       );
     }
 
     // Insert the publication
     const [publication] = await drizzleDb
       .insert(schema.publications)
-      .values(publicationData) // Drizzle handles default ID
+      .values(normalizedData) // Drizzle handles default ID
       .returning();
 
     // If regions were provided, associate them with the publication
@@ -260,18 +267,29 @@ export async function updatePublication(
   const drizzleDb = drizzle(db, { schema });
   const { regions, ...publicationData } = data;
 
+  // Normalize URL if it's provided in the update data
+  const normalizedData = { ...publicationData };
+  if (normalizedData.url) {
+    normalizedData.url = normalizeUrl(normalizedData.url, false); // false = remove protocol
+  }
+
   try {
     // If URL is provided in update data, check if it conflicts with another existing publication
-    if (data.url) {
+    if (normalizedData.url) {
       const existing = await drizzleDb
         .select({ id: schema.publications.id })
         .from(schema.publications)
-        .where(and(eq(schema.publications.url, data.url), sql`${schema.publications.id} != ${id}`))
+        .where(
+          and(
+            eq(schema.publications.url, normalizedData.url),
+            sql`${schema.publications.id} != ${id}`
+          )
+        )
         .limit(1);
       if (existing.length > 0) {
         throw createDbError(
-          `Cannot update publication: URL ${data.url} is already used by another publication (ID: ${existing[0].id}).`,
-          { url: data.url, existingId: existing[0].id, targetId: id }
+          `Cannot update publication: URL ${normalizedData.url} is already used by another publication (ID: ${existing[0].id}).`,
+          { url: normalizedData.url, existingId: existing[0].id, targetId: id }
         );
       }
     }
@@ -279,7 +297,7 @@ export async function updatePublication(
     // Update the publication
     const updatedRows = await drizzleDb
       .update(schema.publications)
-      .set({ ...publicationData, updatedAt: new Date() })
+      .set({ ...normalizedData, updatedAt: new Date() })
       .where(eq(schema.publications.id, id))
       .returning();
 
