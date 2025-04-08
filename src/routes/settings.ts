@@ -3,7 +3,7 @@ import { describeRoute } from 'hono-openapi';
 import { validator as zValidator } from 'hono-openapi/zod';
 import { z } from 'zod';
 
-import { getSettings, upsertSettings } from '../db/queries';
+import { type UpsertSettings, getSettings, upsertSettings } from '../db/queries';
 import { syncFrequencyOptions } from '../db/schema';
 import { authMiddleware, handleDatabaseError } from '../middleware';
 import { createStandardResponseSchema } from '../schema';
@@ -12,7 +12,7 @@ import { createStandardResponseSchema } from '../schema';
 export const SettingsResponseSchema = z.object({
   id: z.number().int().default(1),
   syncEnabled: z.boolean(),
-  syncFrequency: z.enum(syncFrequencyOptions as [string, ...string[]]),
+  syncFrequency: z.enum(syncFrequencyOptions),
   defaultRegion: z.string(),
   serperApiKey: z.string().nullable().optional(),
   createdAt: z.number().int().optional(),
@@ -21,7 +21,7 @@ export const SettingsResponseSchema = z.object({
 
 export const SettingsUpdateSchema = z.object({
   syncEnabled: z.boolean().optional(),
-  syncFrequency: z.enum(syncFrequencyOptions as [string, ...string[]]).optional(),
+  syncFrequency: z.enum(syncFrequencyOptions).optional(),
   defaultRegion: z.string().min(2).max(50).optional(),
   serperApiKey: z.string().min(32).max(100).optional().nullable(),
 });
@@ -146,7 +146,7 @@ settingsRouter.put(
     const updateData = c.req.valid('json');
 
     try {
-      const updated = await upsertSettings(c.env.DB, updateData);
+      const updated = await upsertSettings(c.env.DB, updateData as UpsertSettings);
 
       _logger.info('Application settings updated', { settings: updated });
 
