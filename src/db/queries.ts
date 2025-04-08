@@ -12,6 +12,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
+import { datesToTbsString } from '../utils/date/search-params';
 import {
   headlineCategories,
   publicationCategories,
@@ -738,8 +739,8 @@ export async function getHeadlineByUrl(db: D1Database, url: string): Promise<Hea
 // Represents the data needed to start a sync run record
 export type StartSyncRunData = {
   triggerType: (typeof syncRunTriggerTypes)[number];
-  dateRangeOption?: string | null;
-  customTbs?: string | null;
+  startDate: string;
+  endDate: string;
   maxQueriesPerPublication?: number | null;
 };
 
@@ -758,12 +759,16 @@ export type UpdateSyncRunData = {
 export async function insertSyncRun(db: D1Database, data: StartSyncRunData): Promise<SyncRun> {
   const drizzleDb = drizzle(db, { schema });
   try {
+    // Create date range option string and TBS string from start/end dates
+    const dateRangeOption = `${data.startDate} to ${data.endDate}`;
+    const customTbs = datesToTbsString(data.startDate, data.endDate);
+
     const [newRun] = await drizzleDb
       .insert(schema.syncRuns)
       .values({
         triggerType: data.triggerType,
-        dateRangeOption: data.dateRangeOption,
-        customTbs: data.customTbs,
+        dateRangeOption: dateRangeOption,
+        customTbs: customTbs,
         maxQueriesPerPublication: data.maxQueriesPerPublication,
         status: 'started', // Explicitly set status
         // startedAt is handled by default

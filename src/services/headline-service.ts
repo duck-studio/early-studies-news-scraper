@@ -4,7 +4,7 @@ import { type InsertHeadline, getPublications, insertPublication } from '../db/q
 import { headlineCategories } from '../db/schema';
 import { fetchAllPagesForUrl } from '../services/serper';
 import type { ProcessNewsItemParams } from '../types';
-import { getGeoParams, getTbsString } from '../utils/date/search-params';
+import { datesToTbsString, getGeoParams } from '../utils/date/search-params';
 import { normalizeUrl } from '../utils/url';
 
 // Type for headline categories
@@ -60,17 +60,26 @@ export function prepareHeadlineData(
 
 /**
  * Batch fetch headlines from multiple publication URLs
+ *
+ * @param publicationUrls The URLs to fetch headlines from
+ * @param startDate Start date in DD/MM/YYYY format
+ * @param endDate End date in DD/MM/YYYY format
+ * @param region Region code for search parameters
+ * @param apiKey Serper API key
+ * @param maxQueriesPerPublication Maximum queries per publication
+ * @param logger Logger instance for logging
+ * @returns Promise resolving to an array of fetch results
  */
 export async function batchFetchHeadlines(
   publicationUrls: string[],
-  dateRangeOption: string,
-  customTbs: string | undefined,
+  startDate: string,
+  endDate: string,
   region: string,
   apiKey: string,
   maxQueriesPerPublication: number,
   logger: Logger
 ) {
-  const serperTbs = getTbsString(dateRangeOption, customTbs);
+  const serperTbs = datesToTbsString(startDate, endDate);
   const geoParams = getGeoParams(region);
   const fetchLimit = pLimit(10);
 
@@ -84,6 +93,39 @@ export async function batchFetchHeadlines(
   );
 
   return Promise.all(fetchPromises);
+}
+
+/**
+ * Processes fetched headlines and queues them for asynchronous processing
+ * Common function used by both fetch and sync routes
+ *
+ * @param queue The queue to send messages to
+ * @param itemsToQueue Array of items to queue
+ * @param logger Logger instance for logging
+ * @returns Object containing message count metrics
+ */
+export async function queueHeadlinesForProcessing(
+  queue: Queue,
+  itemsToQueue: ProcessNewsItemParams[],
+  logger: Logger
+): Promise<{ messagesSent: number; messageSendErrors: number }> {
+  if (itemsToQueue.length === 0) {
+    logger.info('No headlines to queue for processing');
+    return { messagesSent: 0, messageSendErrors: 0 };
+  }
+
+  logger.info(`Attempting to queue ${itemsToQueue.length} headlines for workflow processing`);
+
+  const queueResult = await queueBatchMessages(queue, itemsToQueue, logger, {
+    concurrency: 50,
+    delayIncrementBatch: 10,
+    delayIncrementSeconds: 1,
+  });
+
+  const { messagesSent, messageSendErrors } = queueResult;
+  logger.info(`Queue operation complete: ${messagesSent} sent, ${messageSendErrors} failed`);
+
+  return { messagesSent, messageSendErrors };
 }
 
 /**
@@ -164,6 +206,92 @@ export async function buildPublicationUrlMap(
     logger?.error('Failed to build publication URL map', { error });
     return publicationUrlToIdMap;
   }
+}
+
+/**
+ * Prepares items for the queue based on fetched headlines
+ * Common function used by both fetch and sync routes
+ *
+ * @param fetchResults The results from Serper API fetch operations
+ * @param publicationUrlToIdMap Map of publication URLs to IDs
+ * @param logger Logger instance for logging
+ * @returns Object containing processed items and count of filtered headlines
+ */
+export function prepareQueueItemsFromFetchResults(
+  fetchResults: Array<{
+    url: string;
+    error?: Error;
+    results: Array<{
+      title: string;
+      link: string;
+      snippet?: string;
+      date?: string;
+      source: string;
+    }>;
+  }>,
+  publicationUrlToIdMap: Map<string, string>,
+  logger: Logger
+): { itemsToQueue: ProcessNewsItemParams[]; headlinesFilteredCount: number } {
+  const itemsToQueue: ProcessNewsItemParams[] = [];
+  let headlinesFilteredCount = 0;
+
+  // Process each publication's results
+  const processedHeadlines = fetchResults.flatMap((result) => {
+    logger.debug({ url: result.url, hasError: !!result.error }, 'Processing fetch result');
+    if (result.error) {
+      logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
+      return [];
+    }
+
+    const urlWithoutProtocol = normalizeUrl(result.url, false);
+    const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
+
+    if (!publicationId) {
+      logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
+      return [];
+    }
+
+    const transformedResults = result.results.map((item) => ({
+      url: item.link,
+      headline: item.title,
+      snippet: item.snippet ?? null,
+      source: item.source,
+      rawDate: item.date ?? null,
+      normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
+      category: null,
+      publicationId,
+    }));
+
+    logger.debug(
+      { url: result.url, count: transformedResults.length },
+      'Transformed results for publication'
+    );
+    return transformedResults;
+  });
+
+  // Filter by date and prepare queue items
+  for (const item of processedHeadlines) {
+    const parsedDate = parseSerperDate(item.rawDate);
+    if (parsedDate) {
+      headlinesFilteredCount++;
+      itemsToQueue.push({
+        headlineUrl: item.url,
+        publicationId: item.publicationId,
+        headlineText: item.headline,
+        snippet: item.snippet,
+        source: item.source,
+        rawDate: item.rawDate,
+        normalizedDate: item.normalizedDate,
+      });
+    } else {
+      logger.debug(
+        { headline: item.headline, rawDate: item.rawDate },
+        'Filtering result, could not parse date'
+      );
+    }
+  }
+
+  return { itemsToQueue, headlinesFilteredCount };
 }
 
 /**

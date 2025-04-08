@@ -19,7 +19,15 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
-          await performHeadlineSync(env, logger, 'scheduled', 'Past 24 Hours', 'Past 24 Hours', 5);
+          // Get yesterday and today's dates in DD/MM/YYYY format
+          const today = new Date();
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+
+          const yesterdayStr = yesterday.toLocaleDateString('en-GB'); // Format as DD/MM/YYYY
+          const todayStr = today.toLocaleDateString('en-GB'); // Format as DD/MM/YYYY
+
+          await performHeadlineSync(env, logger, 'scheduled', yesterdayStr, todayStr, 5);
         } catch (error) {
           logger.error('Scheduled headline sync failed.', { error });
         }

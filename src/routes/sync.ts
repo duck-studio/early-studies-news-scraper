@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { describeRoute } from 'hono-openapi';
 import { validator as zValidator } from 'hono-openapi/zod';
-import pLimit from 'p-limit';
 import { Logger } from 'pino';
 import { z } from 'zod';
 
@@ -23,26 +22,18 @@ import {
 
 import { authMiddleware, handleDatabaseError } from '../middleware';
 
-import { fetchAllPagesForUrl } from '../services/serper';
+import {
+  batchFetchHeadlines,
+  prepareQueueItemsFromFetchResults,
+  queueHeadlinesForProcessing,
+} from '../services/headline-service';
 
-import { queueBatchMessages } from '../services/queue';
-import { parseSerperDate } from '../utils/date/parsers';
-import { datesToTbsString, getGeoParams } from '../utils/date/search-params';
-import { normalizeUrl } from '../utils/url';
+// Type definitions
 
 // Type for sync operation result
 type SyncSummary = z.infer<typeof ManualSyncResponseDataSchema>;
 
-// Type for workflow item params
-type ProcessNewsItemParams = {
-  headlineUrl: string;
-  publicationId: string;
-  headlineText: string;
-  snippet: string | null;
-  source: string;
-  rawDate: string | null;
-  normalizedDate: string | null;
-};
+// SyncSummary is the result type for our sync operations
 
 /**
  * Performs a headline sync operation to fetch and queue headlines from publications
@@ -66,8 +57,8 @@ async function performHeadlineSync(
   try {
     const { id } = await insertSyncRun(env.DB, {
       triggerType,
-      dateRangeOption: `${startDate} to ${endDate}`,
-      customTbs: datesToTbsString(startDate, endDate),
+      startDate,
+      endDate,
       maxQueriesPerPublication,
     });
     syncRunId = id;
@@ -117,11 +108,6 @@ async function performHeadlineSync(
     const publicationUrls = Array.from(publicationUrlToIdMap.keys());
     logger.info(`Found ${publicationUrls.length} publications to fetch.`);
 
-    const fetchLimit = pLimit(10);
-    const region = 'UK';
-    const tbs = datesToTbsString(startDate, endDate);
-    const geoParams = getGeoParams(region);
-
     // Create date objects from the DD/MM/YYYY format strings
     const startParts = startDate.split('/').map(Number);
     const endParts = endDate.split('/').map(Number);
@@ -130,98 +116,33 @@ async function performHeadlineSync(
       end: new Date(endParts[2], endParts[1] - 1, endParts[0]),
     };
 
-    const fetchPromises = publicationUrls.map((url) =>
-      fetchLimit(() =>
-        fetchAllPagesForUrl(
-          normalizeUrl(url, true),
-          tbs,
-          geoParams,
-          env.SERPER_API_KEY,
-          maxQueriesPerPublication,
-          logger
-        )
-      )
-    );
-
+    // Use the shared function to fetch headlines for all publications
+    const region = 'UK';
     logger.info(`Fetching headlines for ${publicationUrls.length} publications...`);
-    const fetchResults = await Promise.all(fetchPromises);
+    const fetchResults = await batchFetchHeadlines(
+      publicationUrls,
+      startDate,
+      endDate,
+      region,
+      env.SERPER_API_KEY,
+      maxQueriesPerPublication,
+      logger
+    );
     logger.info('Finished fetching headlines.');
 
-    let headlinesFilteredCount = 0;
-    let messagesSent = 0;
-    let _messageSendErrors = 0;
+    // Use the shared function to prepare queue items from the fetch results
+    const { itemsToQueue, headlinesFilteredCount } = prepareQueueItemsFromFetchResults(
+      fetchResults,
+      publicationUrlToIdMap,
+      logger
+    );
 
-    const processedHeadlines = fetchResults.flatMap((result) => {
-      logger.debug({ url: result.url, hasError: !!result.error }, 'Processing fetch result');
-      if (result.error) {
-        logger.warn(`Fetch failed for ${result.url}: ${result.error.message}`);
-        return [];
-      }
-
-      const urlWithoutProtocol = normalizeUrl(result.url, false);
-      const publicationId = publicationUrlToIdMap.get(urlWithoutProtocol);
-
-      if (!publicationId) {
-        logger.warn(`Could not find publication ID for URL: ${result.url}. Skipping its results.`);
-        return [];
-      }
-
-      const transformedResults = result.results.map((item) => ({
-        url: item.link,
-        headline: item.title,
-        snippet: item.snippet ?? null,
-        source: item.source,
-        rawDate: item.date ?? null,
-        normalizedDate: parseSerperDate(item.date)?.toLocaleDateString('en-GB') ?? null,
-        category: null,
-        publicationId,
-      }));
-
-      logger.debug(
-        { url: result.url, count: transformedResults.length },
-        'Transformed results for publication'
-      );
-      return transformedResults;
-    });
-
-    const totalFetched = processedHeadlines.length;
+    const totalFetched = itemsToQueue.length;
     logger.info(`Total headlines fetched across all publications: ${totalFetched}`);
 
-    // Prepare queue payloads
-    const itemsToQueue: ProcessNewsItemParams[] = [];
-
-    for (const item of processedHeadlines) {
-      const parsedDate = parseSerperDate(item.rawDate);
-      if (parsedDate) {
-        headlinesFilteredCount++;
-        itemsToQueue.push({
-          headlineUrl: item.url,
-          publicationId: item.publicationId,
-          headlineText: item.headline,
-          snippet: item.snippet,
-          source: item.source,
-          rawDate: item.rawDate,
-          normalizedDate: item.normalizedDate,
-        });
-      } else {
-        logger.debug(
-          { headline: item.headline, rawDate: item.rawDate },
-          'Sync: Filtering result, could not parse date'
-        );
-      }
-    }
-
-    // Queue the messages
-    if (itemsToQueue.length > 0) {
-      const queueResult = await queueBatchMessages(env.NEWS_ITEM_QUEUE, itemsToQueue, logger, {
-        concurrency: 50,
-        delayIncrementBatch: 10,
-        delayIncrementSeconds: 1,
-      });
-
-      messagesSent = queueResult.messagesSent;
-      _messageSendErrors = queueResult.messageSendErrors;
-    }
+    // Queue the messages using the shared function
+    const { messagesSent, messageSendErrors: _messageSendErrors } =
+      await queueHeadlinesForProcessing(env.NEWS_ITEM_QUEUE, itemsToQueue, logger);
 
     summary = {
       publicationsFetched: fetchResults.filter((r) => !r.error).length,

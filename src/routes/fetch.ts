@@ -15,12 +15,9 @@ import { getPublications, insertPublication } from '../db/queries';
 
 import { authMiddleware } from '../middleware';
 
-import { fetchAllPagesForUrl, publicationLimit } from '../services/serper';
+import { batchFetchHeadlines, queueHeadlinesForProcessing } from '../services/headline-service';
 
-import { queueBatchMessages } from '../services/queue';
 import { parseSerperDate } from '../utils/date/parsers';
-import { datesToTbsString, getGeoParams } from '../utils/date/search-params';
-import { normalizeUrl } from '../utils/url';
 
 // Type for workflow item params
 type ProcessNewsItemParams = {
@@ -145,9 +142,6 @@ fetchRouter.post(
     // Log the supplied date range
     logger.debug('Using date range', { startDate, endDate });
 
-    // Get the tbs string for Serper from startDate and endDate
-    const serperTbs = datesToTbsString(startDate, endDate);
-
     // --- Fetch Publication IDs if triggering workflow ---
     const publicationUrlToIdMap = new Map<string, string>();
     if (triggerWorkflow) {
@@ -176,33 +170,24 @@ fetchRouter.post(
 
     // --- Fetch Headlines ---
     try {
-      const fetchPublicationWithLimit = (url: string) =>
-        fetchAllPagesForUrl(
-          url, // Expects URL with https://
-          serperTbs,
-          getGeoParams(region),
-          c.env.SERPER_API_KEY,
-          maxQueriesPerPublication,
-          logger
-        );
-
-      // Ensure requested URLs have https:// before fetching
-      const publicationUrlsWithHttps = requestedPublicationUrls.map((url) =>
-        normalizeUrl(url, true)
+      // Use the shared function to fetch headlines
+      const rawResults = await batchFetchHeadlines(
+        requestedPublicationUrls,
+        startDate,
+        endDate,
+        region,
+        c.env.SERPER_API_KEY,
+        maxQueriesPerPublication,
+        logger
       );
 
-      const publicationPromises = publicationUrlsWithHttps.map((url) =>
-        publicationLimit(() => fetchPublicationWithLimit(url))
-      );
-
+      // Transform results into the expected format for API response
       const results = await Promise.all(
-        publicationPromises.map(async (resultPromise) => {
-          const result = await resultPromise;
-
+        rawResults.map(async (result) => {
           if (result.error) {
             return {
-              status: 'rejected',
-              url: result.url, // The URL that failed (with https://)
+              status: 'rejected' as const,
+              url: result.url,
               queriesMade: result.queriesMade,
               creditsConsumed: result.credits,
               results: [],
@@ -212,19 +197,19 @@ fetchRouter.post(
 
           // Transform results immediately after fetch
           return {
-            status: 'fulfilled',
-            url: result.url, // Keep the URL used for fetching (with https://)
+            status: 'fulfilled' as const,
+            url: result.url,
             queriesMade: result.queriesMade,
             creditsConsumed: result.credits,
             results: result.results.map((item): TransformedNewsItem => {
               const parsedDate = parseSerperDate(item.date);
               return {
                 headline: item.title,
-                publicationUrl: result.url, // Store the fetched URL (with https://)
+                publicationUrl: result.url,
                 url: item.link,
-                snippet: item.snippet ?? null, // Ensure null if undefined
+                snippet: item.snippet ?? null,
                 source: item.source,
-                rawDate: item.date ?? null, // Ensure null if undefined
+                rawDate: item.date ?? null,
                 normalizedDate: parsedDate ? parsedDate.toLocaleDateString('en-GB') : undefined,
               };
             }),
@@ -311,15 +296,12 @@ fetchRouter.post(
       let _messageSendErrors = 0;
 
       if (triggerWorkflow && itemsToQueue.length > 0) {
-        logger.info(
-          `Attempting to queue ${itemsToQueue.length} headlines for workflow processing.`
+        // Use the shared queueing function
+        const result = await queueHeadlinesForProcessing(
+          c.env.NEWS_ITEM_QUEUE,
+          itemsToQueue,
+          logger
         );
-
-        const result = await queueBatchMessages(c.env.NEWS_ITEM_QUEUE, itemsToQueue, logger, {
-          concurrency: 50,
-          delayIncrementBatch: 10,
-          delayIncrementSeconds: 1,
-        });
 
         messagesSent = result.messagesSent;
         _messageSendErrors = result.messageSendErrors;
