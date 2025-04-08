@@ -230,6 +230,7 @@ export function prepareQueueItemsFromFetchResults(
       date?: string;
       source: string;
     }>;
+    tbsParams?: string;
   }>,
   publicationUrlToIdMap: Map<string, string>,
   logger: Logger
