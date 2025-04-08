@@ -139,7 +139,7 @@ async function performHeadlineSync(
 
     let headlinesFilteredCount = 0;
     let messagesSent = 0;
-    let messageSendErrors = 0;
+    let _messageSendErrors = 0;
     const queueSendLimit = pLimit(50);
     const queueSendPromises: Promise<unknown>[] = [];
     let messageDelaySeconds = 0;
@@ -211,7 +211,7 @@ async function performHeadlineSync(
               logger.error(`Failed to send message to queue for headline: ${item.url}`, {
                 error: queueError,
               });
-              messageSendErrors++;
+              _messageSendErrors++;
             }
           })
         );

@@ -141,10 +141,10 @@ fetchRouter.post(
     logger.debug("Workflow trigger status", { triggerWorkflow });
 
     // --- Date Range Determination ---
-    let filterDateRange: { start: Date; end: Date };
+    let _filterDateRange: { start: Date; end: Date };
     try {
       // Get date range - simplified to use the standard date range method
-      filterDateRange = getDateRange(dateRangeOption);
+      _filterDateRange = getDateRange(dateRangeOption);
     } catch (e) {
       logger.error("Error determining filter date range", { error: e });
       c.status(500);
@@ -245,23 +245,19 @@ fetchRouter.post(
         })
       );
 
-      // --- Filter Results and Prepare for Queue (if applicable) ---
-      let totalItemsBeforeFiltering = 0;
-      let totalItemsAfterFiltering = 0;
-      const itemsToQueue: ProcessNewsItemParams[] = []; // Store items destined for the queue
+      // --- Process Results and Prepare for Queue (if applicable) ---
+      // Variables for tracking processing
+      const itemsToQueue: ProcessNewsItemParams[] = [];
 
       for (const result of results) {
         if (result.status === "fulfilled") {
-          const initialCount = result.results.length;
-          totalItemsBeforeFiltering += initialCount;
+          // Process the results from this publication URL
 
           // Date filtering is simplified here as we don't do advanced filtering
           const dateFilteredResults = result.results;
 
           // Replace original results with filtered ones for the response
           result.results = dateFilteredResults;
-          const finalCount = result.results.length;
-          totalItemsAfterFiltering += finalCount;
 
           // If triggering workflow, prepare items for queuing
           if (triggerWorkflow) {

@@ -2,10 +2,6 @@ import { Context, Next } from 'hono';
 import { Logger } from 'pino';
 import { validateToken } from '../utils';
 
-/**
- * Creates an authentication middleware that validates bearer tokens
- * @returns Hono middleware function
- */
 export function createAuthMiddleware() {
   return async (c: Context<{ Variables: { logger: Logger; requestId: string }; Bindings: Env }>, next: Next) => {
     const logger = c.get('logger');
@@ -36,5 +32,4 @@ export function createAuthMiddleware() {
   };
 }
 
-// Export a singleton instance for convenience
 export const authMiddleware = createAuthMiddleware();

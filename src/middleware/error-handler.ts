@@ -6,9 +6,6 @@ import { DatabaseError } from '../db/queries';
 import { Logger } from 'pino';
 import { parseDdMmYyyy } from '../utils';
 
-/**
- * Handles database errors and returns appropriate responses
- */
 export function handleDatabaseError(
   c: Context<{ Variables: { logger: Logger; requestId: string }; Bindings: Env }>,
   error: unknown,
@@ -55,9 +52,6 @@ export function handleDatabaseError(
   });
 }
 
-/**
- * Middleware to validate that the request body is not empty
- */
 export function validateNonEmptyBody() {
   return async (
     c: Context<{ Variables: { logger: Logger; requestId: string }; Bindings: Env }>,
@@ -77,10 +71,7 @@ export function validateNonEmptyBody() {
   };
 }
 
-/**
- * Helper for creating consistent API responses
- */
-export function createApiResponse<T>(data: T | null, success: boolean, error: any = null, status: number = 200) {
+export function createApiResponse<T>(data: T | null, success: boolean, error: unknown = null, status = 200) {
   return {
     data,
     success,
@@ -89,9 +80,6 @@ export function createApiResponse<T>(data: T | null, success: boolean, error: an
   };
 }
 
-/**
- * Validates and parses dates in DD/MM/YYYY format
- */
 export function validateAndParseDateRange(
   c: Context<{ Variables: { logger: Logger; requestId: string }; Bindings: Env }>,
   body: { startDate?: string; endDate?: string }
@@ -108,8 +96,9 @@ export function validateAndParseDateRange(
       success: false,
       error: { message: 'Invalid start date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' },
     });
-    return null; // Validation failed
+    return null;
   }
+  
   if (body.endDate && !endDate) {
     logger.warn('Invalid end date format provided:', { endDate: body.endDate });
     c.status(400);
@@ -118,10 +107,9 @@ export function validateAndParseDateRange(
       success: false,
       error: { message: 'Invalid end date format. Use DD/MM/YYYY.', code: 'VALIDATION_ERROR' },
     });
-    return null; // Validation failed
+    return null;
   }
 
-  // Ensure start date is not after end date if both are provided
   if (startDate && endDate && startDate > endDate) {
     logger.warn('Start date cannot be after end date', {
       startDate: body.startDate,
@@ -133,9 +121,8 @@ export function validateAndParseDateRange(
       success: false,
       error: { message: 'Start date cannot be after end date.', code: 'VALIDATION_ERROR' },
     });
-    return null; // Validation failed
+    return null;
   }
 
-  // Validation passed, return the parsed dates (which might be undefined)
   return { startDate, endDate };
 }
